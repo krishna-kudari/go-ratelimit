@@ -1,0 +1,179 @@
+# ============================================
+# Go Build Artifacts & Binaries
+# ============================================
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.app
+/app
+/bin
+/dist
+
+# ============================================
+# Go Test & Coverage
+# ============================================
+*.coverprofile
+*.cover
+coverage.txt
+coverage.html
+coverage.xml
+*.prof
+
+# ============================================
+# Go Modules
+# ============================================
+vendor/
+go.sum.bak
+
+# ============================================
+# Build Artifacts (tmp directories)
+# ============================================
+**/tmp/
+tmp/
+*.log
+build-errors.log
+
+# ============================================
+# Air (Hot Reload) - Dev Tool
+# ============================================
+.air.toml
+**/.air.toml
+tmp/
+
+# ============================================
+# IDE & Editor Files
+# ============================================
+# VSCode / Cursor
+.vscode/
+.cursor/
+*.code-workspace
+.history/
+
+# GoLand / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Vim
+*.swp
+*.swo
+*~
+.vim/
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# ============================================
+# OS Files
+# ============================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ============================================
+# Docker
+# ============================================
+# Docker volumes (if using named volumes)
+docker-compose.override.yml
+.docker/
+
+# ============================================
+# Environment & Secrets
+# ============================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+secrets/
+.secrets/
+
+# ============================================
+# Kubernetes
+# ============================================
+# Secrets and sensitive configs
+k8s/**/secrets.yaml
+k8s/**/secrets.yml
+k8s/**/*-secret.yaml
+k8s/**/*-secret.yml
+*.kubeconfig
+
+# ============================================
+# Generated Code (if applicable)
+# ============================================
+# Protobuf generated files (if you want to ignore them)
+# **/*.pb.go
+# **/*_grpc.pb.go
+
+# GraphQL generated files (if you want to ignore them)
+# graphql/generated.go
+# graphql/models_gen.go
+
+# ============================================
+# Logs & Debug Files
+# ============================================
+*.log
+logs/
+*.log.*
+debug.log
+
+# ============================================
+# Temporary Files
+# ============================================
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+
+# ============================================
+# Database Files (if any local DBs)
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# ============================================
+# Redis Files
+# ============================================
+dump.rdb
+*.rdb
+appendonly.aof
+
+# ============================================
+# Documentation Build Output
+# ============================================
+docs/_build/
+site/
+
+# ============================================
+# Project Specific
+# ============================================
+cache/
+*.terraform**
