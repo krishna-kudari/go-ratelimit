@@ -43,7 +43,7 @@ func startServer(t *testing.T, opts ...grpc.ServerOption) (testgrpc.TestServiceC
 	srv := grpc.NewServer(opts...)
 	testgrpc.RegisterTestServiceServer(srv, &testServer{})
 
-	go srv.Serve(lis)
+	go func() { _ = srv.Serve(lis) }()
 
 	conn, err := grpc.NewClient(lis.Addr().String(),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -225,7 +225,7 @@ func TestUnaryServerInterceptor_CustomDeniedHandler(t *testing.T) {
 	ctx := context.Background()
 
 	// Exhaust
-	client.EmptyCall(ctx, &testgrpc.Empty{})
+	_, _ = client.EmptyCall(ctx, &testgrpc.Empty{})
 
 	// Trigger denial
 	_, err = client.EmptyCall(ctx, &testgrpc.Empty{})

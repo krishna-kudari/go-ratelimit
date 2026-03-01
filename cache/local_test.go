@@ -138,25 +138,25 @@ func TestLocalCache_ExhaustedLocalQuota_SyncsBackend(t *testing.T) {
 	ctx := context.Background()
 
 	// Call 1: cache miss → backend (call 1), returns remaining=2, localUsed=0
-	lc.Allow(ctx, "k1")
+	_, _ = lc.Allow(ctx, "k1")
 	if callCount.Load() != 1 {
 		t.Fatalf("expected 1 backend call, got %d", callCount.Load())
 	}
 
 	// Call 2: cache hit → remaining=2, localUsed becomes 1, 2-0>=1 true → serves locally
-	lc.Allow(ctx, "k1")
+	_, _ = lc.Allow(ctx, "k1")
 	if callCount.Load() != 1 {
 		t.Fatalf("expected still 1 backend call, got %d", callCount.Load())
 	}
 
 	// Call 3: cache hit → remaining=2, localUsed=1, 2-1>=1 true → serves locally
-	lc.Allow(ctx, "k1")
+	_, _ = lc.Allow(ctx, "k1")
 	if callCount.Load() != 1 {
 		t.Fatalf("expected still 1 backend call after call 3, got %d", callCount.Load())
 	}
 
 	// Call 4: cache hit → remaining=2, localUsed=2, 2-2=0 < 1 → exhausted, syncs backend (call 2)
-	lc.Allow(ctx, "k1")
+	_, _ = lc.Allow(ctx, "k1")
 	if callCount.Load() != 2 {
 		t.Fatalf("expected 2 backend calls after local exhaustion, got %d", callCount.Load())
 	}
@@ -305,7 +305,7 @@ func TestLocalCache_AllowN(t *testing.T) {
 	}
 
 	// AllowN(1): local quota exhausted (10-10=0 < 1) → syncs backend (call 2)
-	lc.AllowN(ctx, "k1", 1)
+	_, _ = lc.AllowN(ctx, "k1", 1)
 	if mock.getCalls() != 2 {
 		t.Fatalf("expected 2 backend calls, got %d", mock.getCalls())
 	}

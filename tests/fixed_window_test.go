@@ -258,8 +258,8 @@ func TestFixedWindow_Allow_Redis(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		limiter.Allow(ctx, user1)
-		limiter.Allow(ctx, user1)
+		_, _ = limiter.Allow(ctx, user1)
+		_, _ = limiter.Allow(ctx, user1)
 
 		res1, _ := limiter.Allow(ctx, user1)
 		if res1.Allowed {

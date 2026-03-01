@@ -136,7 +136,7 @@ func (s *Store) IncrBy(_ context.Context, key string, n int64) (int64, error) {
 	}
 
 	var current int64
-	fmt.Sscanf(e.value, "%d", &current)
+	_, _ = fmt.Sscanf(e.value, "%d", &current)
 	current += n
 	e.value = fmt.Sprintf("%d", current)
 	s.data[key] = e
@@ -227,8 +227,8 @@ func (s *Store) ZRemRangeByScore(_ context.Context, key, min, max string) error 
 	defer s.mu.Unlock()
 
 	var minF, maxF float64
-	fmt.Sscanf(min, "%f", &minF)
-	fmt.Sscanf(max, "%f", &maxF)
+	_, _ = fmt.Sscanf(min, "%f", &minF)
+	_, _ = fmt.Sscanf(max, "%f", &maxF)
 
 	entries := s.sorted[key]
 	filtered := entries[:0]
@@ -300,13 +300,13 @@ type memoryPipeline struct {
 
 func (p *memoryPipeline) ZAdd(_ context.Context, key string, score float64, member string) {
 	p.ops = append(p.ops, func(ctx context.Context) {
-		p.store.ZAdd(ctx, key, score, member)
+		_ = p.store.ZAdd(ctx, key, score, member)
 	})
 }
 
 func (p *memoryPipeline) Expire(_ context.Context, key string, ttl time.Duration) {
 	p.ops = append(p.ops, func(ctx context.Context) {
-		p.store.Expire(ctx, key, ttl)
+		_ = p.store.Expire(ctx, key, ttl)
 	})
 }
 

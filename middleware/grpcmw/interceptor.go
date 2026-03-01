@@ -222,7 +222,7 @@ func setRateLimitMetadata(ctx context.Context, result *goratelimit.Result) {
 	if !result.Allowed && result.RetryAfter > 0 {
 		md.Append("retry-after", strconv.FormatInt(int64(result.RetryAfter.Seconds()+0.5), 10))
 	}
-	grpc.SetHeader(ctx, md)
+	_ = grpc.SetHeader(ctx, md)
 }
 
 func defaultDeniedHandler(_ context.Context, result *goratelimit.Result) error {

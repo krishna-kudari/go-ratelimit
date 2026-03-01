@@ -97,8 +97,8 @@ func TestMemoryStore_Expire(t *testing.T) {
 	defer s.Close()
 	ctx := context.Background()
 
-	s.Set(ctx, "exp-key", "val", 0)
-	s.Expire(ctx, "exp-key", 100*time.Millisecond)
+	_ = s.Set(ctx, "exp-key", "val", 0)
+	_ = s.Expire(ctx, "exp-key", 100*time.Millisecond)
 
 	ttl, _ := s.TTL(ctx, "exp-key")
 	if ttl <= 0 {
@@ -125,14 +125,14 @@ func TestMemoryStore_TTL(t *testing.T) {
 	}
 
 	// Key with no TTL
-	s.Set(ctx, "no-ttl", "val", 0)
+	_ = s.Set(ctx, "no-ttl", "val", 0)
 	ttl, _ = s.TTL(ctx, "no-ttl")
 	if ttl != -1*time.Second {
 		t.Errorf("expected -1s for no TTL, got %v", ttl)
 	}
 
 	// Key with TTL
-	s.Set(ctx, "with-ttl", "val", 10*time.Second)
+	_ = s.Set(ctx, "with-ttl", "val", 10*time.Second)
 	ttl, _ = s.TTL(ctx, "with-ttl")
 	if ttl < 9*time.Second || ttl > 11*time.Second {
 		t.Errorf("expected ~10s TTL, got %v", ttl)
@@ -145,9 +145,9 @@ func TestMemoryStore_SortedSet(t *testing.T) {
 	ctx := context.Background()
 
 	// ZAdd and ZCard
-	s.ZAdd(ctx, "zset", 1.0, "a")
-	s.ZAdd(ctx, "zset", 2.0, "b")
-	s.ZAdd(ctx, "zset", 3.0, "c")
+	_ = s.ZAdd(ctx, "zset", 1.0, "a")
+	_ = s.ZAdd(ctx, "zset", 2.0, "b")
+	_ = s.ZAdd(ctx, "zset", 3.0, "c")
 
 	count, _ := s.ZCard(ctx, "zset")
 	if count != 3 {
@@ -166,7 +166,7 @@ func TestMemoryStore_SortedSet(t *testing.T) {
 	}
 
 	// ZRemRangeByScore
-	s.ZRemRangeByScore(ctx, "zset", "0", "1.5")
+	_ = s.ZRemRangeByScore(ctx, "zset", "0", "1.5")
 	count, _ = s.ZCard(ctx, "zset")
 	if count != 2 {
 		t.Errorf("expected 2 members after remove, got %d", count)

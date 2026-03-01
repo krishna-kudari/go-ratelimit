@@ -93,7 +93,7 @@ func BenchmarkTokenBucket_AllowN(b *testing.B) {
 			ctx := context.Background()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				l.AllowN(ctx, "k", n)
+				_, _ = l.AllowN(ctx, "k", n)
 			}
 		})
 	}
@@ -105,7 +105,7 @@ func benchAllow(b *testing.B, l Limiter) {
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		l.Allow(ctx, "k")
+		_, _ = l.Allow(ctx, "k")
 	}
 }
 
@@ -114,7 +114,7 @@ func benchAllowParallel(b *testing.B, l Limiter, key string) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			l.Allow(ctx, key)
+			_, _ = l.Allow(ctx, key)
 		}
 	})
 }
@@ -127,7 +127,7 @@ func benchAllowParallelDistinct(b *testing.B, l Limiter) {
 		id := seq.Add(1)
 		key := "user:" + strconv.FormatInt(id, 10)
 		for pb.Next() {
-			l.Allow(ctx, key)
+			_, _ = l.Allow(ctx, key)
 		}
 	})
 }

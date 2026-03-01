@@ -38,7 +38,7 @@ func TestRedisStore_GetSetDel(t *testing.T) {
 	if err := s.Set(ctx, "test:store:k1", "hello", 0); err != nil {
 		t.Fatal(err)
 	}
-	defer s.Del(ctx, "test:store:k1")
+	defer func() { _ = s.Del(ctx, "test:store:k1") }()
 
 	val, err := s.Get(ctx, "test:store:k1")
 	if err != nil {
@@ -64,7 +64,7 @@ func TestRedisStore_IncrBy(t *testing.T) {
 	ctx := context.Background()
 
 	key := "test:store:incr"
-	defer s.Del(ctx, key)
+	defer func() { _ = s.Del(ctx, key) }()
 
 	val, err := s.IncrBy(ctx, key, 5)
 	if err != nil {
@@ -103,11 +103,11 @@ func TestRedisStore_SortedSet(t *testing.T) {
 	ctx := context.Background()
 
 	key := "test:store:zset"
-	defer s.Del(ctx, key)
+	defer func() { _ = s.Del(ctx, key) }()
 
-	s.ZAdd(ctx, key, 1.0, "a")
-	s.ZAdd(ctx, key, 2.0, "b")
-	s.ZAdd(ctx, key, 3.0, "c")
+	_ = s.ZAdd(ctx, key, 1.0, "a")
+	_ = s.ZAdd(ctx, key, 2.0, "b")
+	_ = s.ZAdd(ctx, key, 3.0, "c")
 
 	count, _ := s.ZCard(ctx, key)
 	if count != 3 {
@@ -119,7 +119,7 @@ func TestRedisStore_SortedSet(t *testing.T) {
 		t.Errorf("expected first entry 'a', got %v", entries)
 	}
 
-	s.ZRemRangeByScore(ctx, key, "0", "1.5")
+	_ = s.ZRemRangeByScore(ctx, key, "0", "1.5")
 	count, _ = s.ZCard(ctx, key)
 	if count != 2 {
 		t.Errorf("expected 2 after remove, got %d", count)

@@ -294,8 +294,8 @@ func TestGCRA_Allow(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		limiter.Allow(ctx, key)
-		limiter.Allow(ctx, key)
+		_, _ = limiter.Allow(ctx, key)
+		_, _ = limiter.Allow(ctx, key)
 
 		res, err := limiter.Allow(ctx, key)
 		if err != nil {

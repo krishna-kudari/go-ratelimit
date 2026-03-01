@@ -11,9 +11,9 @@ import (
 )
 
 func okHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 }
 
@@ -176,7 +176,7 @@ func TestRateLimit_CustomDeniedHandler(t *testing.T) {
 			customCalled = true
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error":"custom rate limit message"}`))
+			_, _ = w.Write([]byte(`{"error":"custom rate limit message"}`))
 		},
 	})(okHandler())
 
