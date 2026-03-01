@@ -10,85 +10,105 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type tokenBucketRateLimiter struct {
-	mu            sync.Mutex
-	tokens        int64
-	capacity      int64
-	lastRefilTime time.Time
-	refilRate     int64
+// NewTokenBucket creates a Token Bucket rate limiter.
+// capacity is the maximum number of tokens (burst size).
+// refillRate is the number of tokens added per second.
+// Pass WithRedis for distributed mode; omit for in-memory.
+func NewTokenBucket(capacity, refillRate int64, opts ...Option) (Limiter, error) {
+	if capacity <= 0 || refillRate <= 0 {
+		return nil, fmt.Errorf("goratelimit: capacity and refillRate must be positive")
+	}
+	o := applyOptions(opts)
+
+	if o.RedisClient != nil {
+		return &tokenBucketRedis{
+			redis:      o.RedisClient,
+			capacity:   capacity,
+			refillRate: refillRate,
+			opts:       o,
+		}, nil
+	}
+	return &tokenBucketMemory{
+		states:     make(map[string]*tokenBucketState),
+		capacity:   capacity,
+		refillRate: refillRate,
+		opts:       o,
+	}, nil
 }
 
-func (r *tokenBucketRateLimiter) Allow() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// ─── In-Memory ───────────────────────────────────────────────────────────────
+
+type tokenBucketState struct {
+	tokens     float64
+	lastRefill time.Time
+}
+
+type tokenBucketMemory struct {
+	mu         sync.Mutex
+	states     map[string]*tokenBucketState
+	capacity   int64
+	refillRate int64
+	opts       *Options
+}
+
+func (t *tokenBucketMemory) Allow(ctx context.Context, key string) (*Result, error) {
+	return t.AllowN(ctx, key, 1)
+}
+
+func (t *tokenBucketMemory) AllowN(ctx context.Context, key string, n int) (*Result, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	state, ok := t.states[key]
+	if !ok {
+		state = &tokenBucketState{
+			tokens:     float64(t.capacity),
+			lastRefill: time.Now(),
+		}
+		t.states[key] = state
+	}
 
 	now := time.Now()
-	tokens := now.Sub(r.lastRefilTime).Seconds() * float64(r.refilRate)
-	r.tokens = min(r.capacity, r.tokens+int64(tokens))
-	r.lastRefilTime = now
-	if r.tokens > 0 {
-		r.tokens--
-		return true
-	}
-	return false
-}
+	elapsed := now.Sub(state.lastRefill).Seconds()
+	state.tokens = math.Min(float64(t.capacity), state.tokens+elapsed*float64(t.refillRate))
+	state.lastRefill = now
 
-func NewtokenBucketRateLimitter(maxCapacity int64, refilRate int64) (*tokenBucketRateLimiter, error) {
-	if maxCapacity <= 0 || refilRate <= 0 {
-		return nil, fmt.Errorf("goratelimit.NewFixedWindowRateLimitter: max_requests and window_seconds must be positive and greater than zero")
+	cost := float64(n)
+	if state.tokens >= cost {
+		state.tokens -= cost
+		remaining := int64(math.Floor(state.tokens))
+		return &Result{
+			Allowed:   true,
+			Remaining: remaining,
+			Limit:     t.capacity,
+		}, nil
 	}
-	return &tokenBucketRateLimiter{
-		capacity:      maxCapacity,
-		tokens:        maxCapacity,
-		refilRate:     refilRate,
-		lastRefilTime: time.Now(),
+
+	deficit := cost - state.tokens
+	retryAfter := time.Duration(math.Ceil(deficit/float64(t.refillRate)) * float64(time.Second))
+	return &Result{
+		Allowed:    false,
+		Remaining:  0,
+		Limit:      t.capacity,
+		RetryAfter: retryAfter,
 	}, nil
 }
 
-type tokenBucketRateLimitStore struct {
-	mu       sync.Mutex
-	limiters map[string]*tokenBucketRateLimiter
+func (t *tokenBucketMemory) Reset(ctx context.Context, key string) error {
+	t.mu.Lock()
+	delete(t.states, key)
+	t.mu.Unlock()
+	return nil
 }
 
-func (r *tokenBucketRateLimitStore) Allow(ctx context.Context, useId string) bool {
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, ok := r.limiters[useId]; !ok {
-		r.limiters[useId], _ = NewtokenBucketRateLimitter(100, 60)
-	}
-	return r.limiters[useId].Allow()
-}
-
-type tokenBucketRedisRateLimiter struct {
-	redis         *redis.Client
-	capacity   int64
-	refilRate int64
-}
-
-func NewtokenBucketRedisRateLimiter(ctx context.Context, capacity int64, refilRate int64) (*tokenBucketRedisRateLimiter, error) {
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       0,
-		Protocol: 2,
-	})
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis connection failed: %w", err)
-	}
-	return &tokenBucketRedisRateLimiter{
-		redis:         redisClient,
-		capacity:   capacity,
-		refilRate: refilRate,
-	}, nil
-}
+// ─── Redis ────────────────────────────────────────────────────────────────────
 
 var tokenBucketScript = redis.NewScript(`
 local key = KEYS[1]
 local max_tokens = tonumber(ARGV[1])
 local refill_rate = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
+local cost = tonumber(ARGV[4])
 
 local data = redis.call('HGETALL', key)
 local tokens = max_tokens
@@ -107,44 +127,65 @@ local elapsed = now - last_refill
 tokens = math.min(max_tokens, tokens + elapsed * refill_rate)
 
 local allowed = 0
-local remaining = tokens
+local remaining = math.floor(tokens)
+local retry_after = 0
 
-if tokens >= 1 then
-  tokens = tokens - 1
-  remaining = tokens
+if tokens >= cost then
+  tokens = tokens - cost
+  remaining = math.floor(tokens)
   allowed = 1
+else
+  local deficit = cost - tokens
+  retry_after = math.ceil(deficit / refill_rate)
 end
 
 redis.call('HSET', key, 'tokens', tostring(tokens), 'last_refill', tostring(now))
 redis.call('EXPIRE', key, math.ceil(max_tokens / refill_rate) + 1)
 
-return { allowed, math.floor(remaining) }
+return { allowed, remaining, retry_after }
 `)
-func (r *tokenBucketRedisRateLimiter) Allow(ctx context.Context, userID string) (allowed bool, remaining int64, limit int64, retryAfter int64) {
-	capacity, refilRate := r.capacity, r.refilRate
-	limit = capacity
 
-	key := fmt.Sprintf("ratelimit:%s", userID)
-	now := float64(time.Now().UnixNano()) / 1e9 // fractional seconds
+type tokenBucketRedis struct {
+	redis      *redis.Client
+	capacity   int64
+	refillRate int64
+	opts       *Options
+}
 
-	result, err := tokenBucketScript.Run(ctx, r.redis, []string{key},
-		capacity,
-		refilRate,
+func (t *tokenBucketRedis) Allow(ctx context.Context, key string) (*Result, error) {
+	return t.AllowN(ctx, key, 1)
+}
+
+func (t *tokenBucketRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
+	fullKey := fmt.Sprintf("%s:%s", t.opts.KeyPrefix, key)
+	now := float64(time.Now().UnixNano()) / 1e9
+
+	result, err := tokenBucketScript.Run(ctx, t.redis, []string{fullKey},
+		t.capacity,
+		t.refillRate,
 		now,
+		n,
 	).Int64Slice()
 	if err != nil {
-		return true, limit - 1, limit, 0 // fail open
-	}
-
-	allowed = result[0] == 1
-	remaining = result[1]
-
-	if !allowed {
-		retryAfter = int64(math.Ceil(1.0 / float64(refilRate)))
-		if retryAfter < 1 {
-			retryAfter = 1
+		if t.opts.FailOpen {
+			return &Result{Allowed: true, Remaining: t.capacity - 1, Limit: t.capacity}, nil
 		}
+		return &Result{Allowed: false, Remaining: 0, Limit: t.capacity}, fmt.Errorf("goratelimit: redis error: %w", err)
 	}
 
-	return allowed, remaining, limit, retryAfter
+	allowed := result[0] == 1
+	remaining := result[1]
+	retryAfterSec := result[2]
+
+	return &Result{
+		Allowed:    allowed,
+		Remaining:  remaining,
+		Limit:      t.capacity,
+		RetryAfter: time.Duration(retryAfterSec) * time.Second,
+	}, nil
+}
+
+func (t *tokenBucketRedis) Reset(ctx context.Context, key string) error {
+	fullKey := fmt.Sprintf("%s:%s", t.opts.KeyPrefix, key)
+	return t.redis.Del(ctx, fullKey).Err()
 }

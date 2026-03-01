@@ -9,113 +9,180 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type fixedWindowRateLimiter struct {
-	mu             sync.Mutex
-	max_requests   int64
-	window_seconds int64
-	requests       int64
-	window_start   time.Time
+// NewFixedWindow creates a Fixed Window rate limiter.
+// maxRequests is the maximum requests allowed per window.
+// windowSeconds is the window duration in seconds.
+// Pass WithRedis for distributed mode; omit for in-memory.
+func NewFixedWindow(maxRequests, windowSeconds int64, opts ...Option) (Limiter, error) {
+	if maxRequests <= 0 || windowSeconds <= 0 {
+		return nil, fmt.Errorf("goratelimit: maxRequests and windowSeconds must be positive")
+	}
+	o := applyOptions(opts)
+
+	if o.RedisClient != nil {
+		return &fixedWindowRedis{
+			redis:         o.RedisClient,
+			maxRequests:   maxRequests,
+			windowSeconds: windowSeconds,
+			opts:          o,
+		}, nil
+	}
+	return &fixedWindowMemory{
+		states:        make(map[string]*fixedWindowState),
+		maxRequests:   maxRequests,
+		windowSeconds: windowSeconds,
+		opts:          o,
+	}, nil
 }
 
-func (r *fixedWindowRateLimiter) Allow() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// ─── In-Memory ───────────────────────────────────────────────────────────────
+
+type fixedWindowState struct {
+	requests    int64
+	windowStart time.Time
+}
+
+type fixedWindowMemory struct {
+	mu            sync.Mutex
+	states        map[string]*fixedWindowState
+	maxRequests   int64
+	windowSeconds int64
+	opts          *Options
+}
+
+func (f *fixedWindowMemory) Allow(ctx context.Context, key string) (*Result, error) {
+	return f.AllowN(ctx, key, 1)
+}
+
+func (f *fixedWindowMemory) AllowN(ctx context.Context, key string, n int) (*Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	state, ok := f.states[key]
+	if !ok {
+		state = &fixedWindowState{windowStart: time.Now()}
+		f.states[key] = state
+	}
 
 	now := time.Now()
-	if now.Sub(r.window_start) >= time.Duration(r.window_seconds)*time.Second {
-		r.window_start = time.Now()
-		r.requests = 0
+	windowDuration := time.Duration(f.windowSeconds) * time.Second
+	if now.Sub(state.windowStart) >= windowDuration {
+		state.windowStart = now
+		state.requests = 0
 	}
 
-	if r.requests < r.max_requests {
-		r.requests++
-		return true
+	cost := int64(n)
+	if state.requests+cost <= f.maxRequests {
+		state.requests += cost
+		remaining := f.maxRequests - state.requests
+		resetAt := state.windowStart.Add(windowDuration)
+		return &Result{
+			Allowed:   true,
+			Remaining: remaining,
+			Limit:     f.maxRequests,
+			ResetAt:   resetAt,
+		}, nil
 	}
-	return false
-}
 
-func NewFixedWindowRateLimitter(max_requests int64, window_seconds int64) (*fixedWindowRateLimiter, error) {
-	if max_requests <= 0 || window_seconds <= 0 {
-		return nil, fmt.Errorf("goratelimit.NewFixedWindowRateLimitter: max_requests and window_seconds must be positive and greater than zero")
+	resetAt := state.windowStart.Add(windowDuration)
+	retryAfter := time.Until(resetAt)
+	if retryAfter < 0 {
+		retryAfter = 0
 	}
-	return &fixedWindowRateLimiter{
-		max_requests:   max_requests,
-		window_seconds: window_seconds,
-		requests:       0,
-		window_start:   time.Now(),
+	return &Result{
+		Allowed:    false,
+		Remaining:  0,
+		Limit:      f.maxRequests,
+		ResetAt:    resetAt,
+		RetryAfter: retryAfter,
 	}, nil
 }
 
-type RateLimitStore struct {
-	mu       sync.Mutex
-	limiters map[string]*fixedWindowRateLimiter
+func (f *fixedWindowMemory) Reset(ctx context.Context, key string) error {
+	f.mu.Lock()
+	delete(f.states, key)
+	f.mu.Unlock()
+	return nil
 }
 
-func (r *RateLimitStore) Allow(ctx context.Context, useId string) bool {
+// ─── Redis ────────────────────────────────────────────────────────────────────
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+var fixedWindowScript = redis.NewScript(`
+local key = KEYS[1]
+local max_requests = tonumber(ARGV[1])
+local window_seconds = tonumber(ARGV[2])
+local cost = tonumber(ARGV[3])
 
-	if _, ok := r.limiters[useId]; !ok {
-		r.limiters[useId], _ = NewFixedWindowRateLimitter(100, 60)
-	}
-	return r.limiters[useId].Allow()
-}
+local count = redis.call('GET', key)
+if not count then
+  count = 0
+else
+  count = tonumber(count)
+end
 
-type RedisRateLimiter struct {
+if count + cost <= max_requests then
+  local new_count = redis.call('INCRBY', key, cost)
+  if new_count == cost and count == 0 then
+    redis.call('EXPIRE', key, window_seconds)
+  end
+  local remaining = max_requests - new_count
+  local ttl = redis.call('TTL', key)
+  return { 1, remaining, ttl }
+end
+
+local ttl = redis.call('TTL', key)
+if ttl < 0 then
+  ttl = window_seconds
+end
+return { 0, 0, ttl }
+`)
+
+type fixedWindowRedis struct {
 	redis         *redis.Client
-	MaxRequests   int64
-	WindowSeconds int64
+	maxRequests   int64
+	windowSeconds int64
+	opts          *Options
 }
 
-func NewRedisRateLimiter(ctx context.Context, max_requests int64, window_seconds int64) (*RedisRateLimiter, error) {
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       0,
-		Protocol: 2,
-	})
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis connection failed: %w", err)
+func (f *fixedWindowRedis) Allow(ctx context.Context, key string) (*Result, error) {
+	return f.AllowN(ctx, key, 1)
+}
+
+func (f *fixedWindowRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
+	fullKey := fmt.Sprintf("%s:%s", f.opts.KeyPrefix, key)
+
+	result, err := fixedWindowScript.Run(ctx, f.redis, []string{fullKey},
+		f.maxRequests,
+		f.windowSeconds,
+		n,
+	).Int64Slice()
+	if err != nil {
+		if f.opts.FailOpen {
+			return &Result{Allowed: true, Remaining: f.maxRequests - 1, Limit: f.maxRequests}, nil
+		}
+		return &Result{Allowed: false, Remaining: 0, Limit: f.maxRequests}, fmt.Errorf("goratelimit: redis error: %w", err)
 	}
-	return &RedisRateLimiter{
-		redis:         redisClient,
-		MaxRequests:   max_requests,
-		WindowSeconds: window_seconds,
+
+	allowed := result[0] == 1
+	remaining := result[1]
+	ttlSec := result[2]
+
+	resetAt := time.Now().Add(time.Duration(ttlSec) * time.Second)
+	var retryAfter time.Duration
+	if !allowed {
+		retryAfter = time.Duration(ttlSec) * time.Second
+	}
+
+	return &Result{
+		Allowed:    allowed,
+		Remaining:  remaining,
+		Limit:      f.maxRequests,
+		ResetAt:    resetAt,
+		RetryAfter: retryAfter,
 	}, nil
 }
 
-func (r *RedisRateLimiter) Allow(ctx context.Context, userID string) (allowed bool, remaining int64, limit int64, retryAfter int64) {
-	key := fmt.Sprintf("ratelimit:%s", userID)
-	max_requests, window_seconds := r.MaxRequests, r.WindowSeconds
-	allowed = true
-	limit = max_requests
-
-	count, err := r.redis.Incr(ctx, key).Result()
-	if err != nil {
-		// false open approach
-		return allowed, max_requests - 1, max_requests, 0
-	}
-	if count == 1 {
-		_, err = r.redis.Expire(ctx, key, time.Duration(window_seconds)*time.Second).Result()
-		if err != nil {
-			return allowed, max_requests - 1, max_requests, 0
-		}
-	}
-
-	allowed = count <= max_requests
-	remaining = max(max_requests-count, 0)
-	if !allowed {
-		TTL, err := r.redis.TTL(ctx, key).Result()
-		if err != nil {
-			retryAfter = window_seconds
-			return
-		}
-		if TTL.Seconds() > 0 {
-			retryAfter = int64(TTL.Seconds())
-		} else {
-			retryAfter = window_seconds
-		}
-	}
-	return
+func (f *fixedWindowRedis) Reset(ctx context.Context, key string) error {
+	fullKey := fmt.Sprintf("%s:%s", f.opts.KeyPrefix, key)
+	return f.redis.Del(ctx, fullKey).Err()
 }

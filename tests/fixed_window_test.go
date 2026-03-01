@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"github.com/krishna-kudari/ratelimit"
+	"github.com/redis/go-redis/v9"
 )
 
-func TestNewFixedWindowRateLimitter(t *testing.T) {
+func TestNewFixedWindow(t *testing.T) {
 	tests := []struct {
 		name           string
 		maxRequests    int64
@@ -55,7 +56,7 @@ func TestNewFixedWindowRateLimitter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			limiter, err := goratelimit.NewFixedWindowRateLimitter(tt.maxRequests, tt.windowSeconds)
+			limiter, err := goratelimit.NewFixedWindow(tt.maxRequests, tt.windowSeconds)
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error but got none")
@@ -72,83 +73,94 @@ func TestNewFixedWindowRateLimitter(t *testing.T) {
 				if limiter == nil {
 					t.Errorf("expected limiter to be non-nil, got nil")
 				}
-				// Note: Can't access unexported fields from external test package
-				// Verify limiter is not nil instead
-				if limiter == nil {
-					t.Error("limiter should not be nil")
-				}
 			}
 		})
 	}
 }
 
-func TestFixedWindowRateLimiter_Allow(t *testing.T) {
+func TestFixedWindow_Allow(t *testing.T) {
+	ctx := context.Background()
+	key := "test-key"
+
 	t.Run("allows requests within limit", func(t *testing.T) {
-		limiter, err := goratelimit.NewFixedWindowRateLimitter(5, 60)
+		limiter, err := goratelimit.NewFixedWindow(5, 60)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
 		for i := 0; i < 5; i++ {
-			if !limiter.Allow() {
+			res, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !res.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
 		}
 	})
 
 	t.Run("rejects requests exceeding limit", func(t *testing.T) {
-		limiter, err := goratelimit.NewFixedWindowRateLimitter(3, 60)
+		limiter, err := goratelimit.NewFixedWindow(3, 60)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Allow 3 requests
 		for i := 0; i < 3; i++ {
-			if !limiter.Allow() {
+			res, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !res.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
 		}
 
-		// 4th request should be rejected
-		if limiter.Allow() {
+		res, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Allowed {
 			t.Error("4th request should be rejected")
 		}
 	})
 
 	t.Run("resets window after time expires", func(t *testing.T) {
-		limiter, err := goratelimit.NewFixedWindowRateLimitter(2, 1) // 2 requests per second
+		limiter, err := goratelimit.NewFixedWindow(2, 1)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Use up the limit
-		if !limiter.Allow() {
+		res, _ := limiter.Allow(ctx, key)
+		if !res.Allowed {
 			t.Error("first request should be allowed")
 		}
-		if !limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if !res.Allowed {
 			t.Error("second request should be allowed")
 		}
-		if limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if res.Allowed {
 			t.Error("third request should be rejected")
 		}
 
-		// Wait for window to expire
 		time.Sleep(1100 * time.Millisecond)
 
-		// Should allow requests again
-		if !limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if !res.Allowed {
 			t.Error("request after window expiry should be allowed")
 		}
-		if !limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if !res.Allowed {
 			t.Error("second request after window expiry should be allowed")
 		}
-		if limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if res.Allowed {
 			t.Error("third request after window expiry should be rejected")
 		}
 	})
 
 	t.Run("concurrent access", func(t *testing.T) {
-		limiter, err := goratelimit.NewFixedWindowRateLimitter(100, 60)
+		limiter, err := goratelimit.NewFixedWindow(100, 60)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -156,7 +168,8 @@ func TestFixedWindowRateLimiter_Allow(t *testing.T) {
 		allowed := make(chan bool, 200)
 		for i := 0; i < 200; i++ {
 			go func() {
-				allowed <- limiter.Allow()
+				res, _ := limiter.Allow(ctx, key)
+				allowed <- res.Allowed
 			}()
 		}
 
@@ -173,148 +186,93 @@ func TestFixedWindowRateLimiter_Allow(t *testing.T) {
 	})
 }
 
-func TestRateLimitStore_Allow(t *testing.T) {
-	t.Run("creates limiter for new user", func(t *testing.T) {
-		// Note: RateLimitStore has unexported fields, so we can't construct it directly
-		// This test would need a constructor function or be moved to same package
-		t.Skip("RateLimitStore has unexported fields - needs constructor or same-package test")
-	})
-
-	t.Run("tracks separate limits per user", func(t *testing.T) {
-		t.Skip("RateLimitStore has unexported fields - needs constructor or same-package test")
-		store := &goratelimit.RateLimitStore{
-			// limiters field is unexported
-		}
-
-		// Use up limit for user1
-		for i := 0; i < 100; i++ {
-			store.Allow(context.Background(), "user1")
-		}
-
-		// user1 should be rate limited
-		if store.Allow(context.Background(), "user1") {
-			t.Error("user1 should be rate limited")
-		}
-
-		// user2 should still have full limit
-		if !store.Allow(context.Background(), "user2") {
-			t.Error("user2 should not be rate limited")
-		}
-	})
-
-	t.Run("concurrent access to different users", func(t *testing.T) {
-		t.Skip("RateLimitStore has unexported fields - needs constructor or same-package test")
-		store := &goratelimit.RateLimitStore{
-			// limiters field is unexported
-		}
-
-		done := make(chan bool, 2)
-		go func() {
-			for i := 0; i < 50; i++ {
-				store.Allow(context.Background(), "user1")
-			}
-			done <- true
-		}()
-		go func() {
-			for i := 0; i < 50; i++ {
-				store.Allow(context.Background(), "user2")
-			}
-			done <- true
-		}()
-
-		<-done
-		<-done
-
-		// Both users should still have remaining requests
-		if !store.Allow(context.Background(), "user1") {
-			t.Error("user1 should have remaining requests")
-		}
-		if !store.Allow(context.Background(), "user2") {
-			t.Error("user2 should have remaining requests")
-		}
-	})
-}
-
-func TestRedisRateLimiter_Allow(t *testing.T) {
-	// Skip if Redis is not available
+func TestFixedWindow_Allow_Redis(t *testing.T) {
 	ctx := context.Background()
-	limiter, err := goratelimit.NewRedisRateLimiter(ctx, 10, 60)
-	if err != nil {
+	client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	if err := client.Ping(ctx).Err(); err != nil {
 		t.Skipf("Redis not available: %v", err)
 	}
 
+	limiter, err := goratelimit.NewFixedWindow(10, 60, goratelimit.WithRedis(client))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	t.Run("allows requests within limit", func(t *testing.T) {
-		userID := "test-user-1"
-		allowed, remaining, limit, retryAfter := limiter.Allow(ctx, userID)
-		if !allowed {
+		key := fmt.Sprintf("test-user-1-%d", time.Now().UnixNano())
+		res, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Allowed {
 			t.Error("first request should be allowed")
 		}
-		if remaining < 0 || remaining > limit {
-			t.Errorf("remaining should be between 0 and %d, got %d", limit, remaining)
+		if res.Remaining < 0 || res.Remaining > res.Limit {
+			t.Errorf("remaining should be between 0 and %d, got %d", res.Limit, res.Remaining)
 		}
-		if retryAfter != 0 {
-			t.Errorf("retryAfter should be 0 when allowed, got %d", retryAfter)
+		if res.RetryAfter != 0 {
+			t.Errorf("retryAfter should be 0 when allowed, got %v", res.RetryAfter)
 		}
 	})
 
 	t.Run("rejects requests exceeding limit", func(t *testing.T) {
-		userID := fmt.Sprintf("test-user-2-%d", time.Now().UnixNano())
-		limiter, err := goratelimit.NewRedisRateLimiter(ctx, 3, 60)
+		key := fmt.Sprintf("test-user-2-%d", time.Now().UnixNano())
+		limiter, err := goratelimit.NewFixedWindow(3, 60, goratelimit.WithRedis(client))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Make 3 requests
 		for i := 0; i < 3; i++ {
-			allowed, _, _, _ := limiter.Allow(ctx, userID)
-			if !allowed {
+			res, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !res.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
 		}
 
-		// 4th request should be rejected
-		allowed, remaining, _, retryAfter := limiter.Allow(ctx, userID)
-		if allowed {
+		res, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Allowed {
 			t.Error("4th request should be rejected")
 		}
-		if remaining != 0 {
-			t.Errorf("remaining should be 0, got %d", remaining)
+		if res.Remaining != 0 {
+			t.Errorf("remaining should be 0, got %d", res.Remaining)
 		}
-		if retryAfter <= 0 {
-			t.Errorf("retryAfter should be positive, got %d", retryAfter)
+		if res.RetryAfter <= 0 {
+			t.Errorf("retryAfter should be positive, got %v", res.RetryAfter)
 		}
-		if retryAfter > 60 {
-			t.Errorf("retryAfter should not exceed limit, got %d", retryAfter)
+		if res.RetryAfter > 60*time.Second {
+			t.Errorf("retryAfter should not exceed limit, got %v", res.RetryAfter)
 		}
 	})
 
 	t.Run("tracks separate limits per user", func(t *testing.T) {
 		user1 := fmt.Sprintf("test-user-3-%d", time.Now().UnixNano())
 		user2 := fmt.Sprintf("test-user-4-%d", time.Now().UnixNano())
-		limiter, err := goratelimit.NewRedisRateLimiter(ctx, 2, 60)
+		limiter, err := goratelimit.NewFixedWindow(2, 60, goratelimit.WithRedis(client))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Use up limit for user1
 		limiter.Allow(ctx, user1)
 		limiter.Allow(ctx, user1)
 
-		// user1 should be rate limited
-		allowed1, _, _, _ := limiter.Allow(ctx, user1)
-		if allowed1 {
+		res1, _ := limiter.Allow(ctx, user1)
+		if res1.Allowed {
 			t.Error("user1 should be rate limited")
 		}
 
-		// user2 should still have full limit
-		allowed2, _, _, _ := limiter.Allow(ctx, user2)
-		if !allowed2 {
+		res2, _ := limiter.Allow(ctx, user2)
+		if !res2.Allowed {
 			t.Error("user2 should not be rate limited")
 		}
 	})
 }
 
-// Helper function
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		(len(s) > len(substr) && (s[:len(substr)] == substr ||

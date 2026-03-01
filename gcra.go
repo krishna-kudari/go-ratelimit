@@ -10,47 +10,94 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ─── In-Memory ───────────────────────────────────────────────────────────────
-
-type gcraRateLimiter struct {
-	mu                 sync.Mutex
-	emissionInterval   float64 // 1 / rate
-	burstAllowance     float64 // (burst - 1) * emissionInterval
-	tat                float64 // theoretical arrival time (unix seconds)
-}
-
-func NewGCRARateLimiter(rate int64, burst int64) (*gcraRateLimiter, error) {
+// NewGCRA creates a GCRA (Generic Cell Rate Algorithm) rate limiter.
+// rate is the sustained request rate per second. burst is the maximum burst size.
+// Pass WithRedis for distributed mode; omit for in-memory.
+func NewGCRA(rate, burst int64, opts ...Option) (Limiter, error) {
 	if rate <= 0 || burst <= 0 {
-		return nil, fmt.Errorf("goratelimit: rate and burst must be positive and greater than zero")
+		return nil, fmt.Errorf("goratelimit: rate and burst must be positive")
 	}
+	o := applyOptions(opts)
 	emissionInterval := 1.0 / float64(rate)
-	return &gcraRateLimiter{
+	burstAllowance := float64(burst-1) * emissionInterval
+
+	if o.RedisClient != nil {
+		return &gcraRedis{
+			redis:            o.RedisClient,
+			emissionInterval: emissionInterval,
+			burstAllowance:   burstAllowance,
+			burst:            burst,
+			opts:             o,
+		}, nil
+	}
+	return &gcraMemory{
+		states:           make(map[string]*gcraState),
 		emissionInterval: emissionInterval,
-		burstAllowance:   float64(burst-1) * emissionInterval,
-		tat:              0,
+		burstAllowance:   burstAllowance,
+		burst:            burst,
+		opts:             o,
 	}, nil
 }
 
-// Allow returns (allowed, remaining, retryAfter)
-func (r *gcraRateLimiter) Allow() (allowed bool, remaining int64, retryAfter float64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// ─── In-Memory ───────────────────────────────────────────────────────────────
 
-	now := float64(time.Now().UnixNano()) / 1e9
+type gcraState struct {
+	tat float64
+}
 
-	// TAT can't be in the past
-	tat := math.Max(r.tat, now)
-	newTAT := tat + r.emissionInterval
-	diff := newTAT - now
+type gcraMemory struct {
+	mu               sync.Mutex
+	states           map[string]*gcraState
+	emissionInterval float64
+	burstAllowance   float64
+	burst            int64
+	opts             *Options
+}
 
-	if diff <= r.burstAllowance+r.emissionInterval {
-		r.tat = newTAT
-		remaining = int64(math.Floor((r.burstAllowance - diff + r.emissionInterval) / r.emissionInterval))
-		return true, remaining, 0
+func (g *gcraMemory) Allow(ctx context.Context, key string) (*Result, error) {
+	return g.AllowN(ctx, key, 1)
+}
+
+func (g *gcraMemory) AllowN(ctx context.Context, key string, n int) (*Result, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	state, ok := g.states[key]
+	if !ok {
+		state = &gcraState{}
+		g.states[key] = state
 	}
 
-	retryAfter = math.Ceil(diff - r.burstAllowance)
-	return false, 0, retryAfter
+	now := float64(time.Now().UnixNano()) / 1e9
+	tat := math.Max(state.tat, now)
+	increment := g.emissionInterval * float64(n)
+	newTAT := tat + increment
+	diff := newTAT - now
+
+	if diff <= g.burstAllowance+g.emissionInterval {
+		state.tat = newTAT
+		remaining := int64(math.Floor((g.burstAllowance - diff + g.emissionInterval) / g.emissionInterval))
+		return &Result{
+			Allowed:   true,
+			Remaining: remaining,
+			Limit:     g.burst,
+		}, nil
+	}
+
+	retryAfter := time.Duration(math.Ceil(diff-g.burstAllowance) * float64(time.Second))
+	return &Result{
+		Allowed:    false,
+		Remaining:  0,
+		Limit:      g.burst,
+		RetryAfter: retryAfter,
+	}, nil
+}
+
+func (g *gcraMemory) Reset(ctx context.Context, key string) error {
+	g.mu.Lock()
+	delete(g.states, key)
+	g.mu.Unlock()
+	return nil
 }
 
 // ─── Redis ────────────────────────────────────────────────────────────────────
@@ -60,16 +107,17 @@ local key = KEYS[1]
 local emission_interval = tonumber(ARGV[1])
 local burst_allowance = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
+local increment = tonumber(ARGV[4])
 
 local tat = tonumber(redis.call('GET', key)) or now
 tat = math.max(tat, now)
 
-local new_tat = tat + emission_interval
+local new_tat = tat + increment
 local diff = new_tat - now
 
 if diff <= burst_allowance + emission_interval then
     redis.call('SET', key, tostring(new_tat))
-    redis.call('EXPIRE', key, math.ceil((burst_allowance + emission_interval) + 1))
+    redis.call('EXPIRE', key, math.ceil(burst_allowance + emission_interval) + 1)
     local remaining = math.floor((burst_allowance - diff + emission_interval) / emission_interval)
     return { 1, remaining, 0 }
 else
@@ -78,53 +126,49 @@ else
 end
 `)
 
-type gcraRedisRateLimiter struct {
+type gcraRedis struct {
 	redis            *redis.Client
 	emissionInterval float64
 	burstAllowance   float64
 	burst            int64
+	opts             *Options
 }
 
-func NewGCRARedisRateLimiter(ctx context.Context, rate int64, burst int64) (*gcraRedisRateLimiter, error) {
-	if rate <= 0 || burst <= 0 {
-		return nil, fmt.Errorf("goratelimit: rate and burst must be positive and greater than zero")
+func (g *gcraRedis) Allow(ctx context.Context, key string) (*Result, error) {
+	return g.AllowN(ctx, key, 1)
+}
+
+func (g *gcraRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
+	fullKey := fmt.Sprintf("%s:%s", g.opts.KeyPrefix, key)
+	now := float64(time.Now().UnixNano()) / 1e9
+	increment := g.emissionInterval * float64(n)
+
+	result, err := gcraScript.Run(ctx, g.redis, []string{fullKey},
+		g.emissionInterval,
+		g.burstAllowance,
+		now,
+		increment,
+	).Int64Slice()
+	if err != nil {
+		if g.opts.FailOpen {
+			return &Result{Allowed: true, Remaining: g.burst - 1, Limit: g.burst}, nil
+		}
+		return &Result{Allowed: false, Remaining: 0, Limit: g.burst}, fmt.Errorf("goratelimit: redis error: %w", err)
 	}
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       0,
-		Protocol: 2,
-	})
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("goratelimit: redis connection failed: %w", err)
-	}
-	emissionInterval := 1.0 / float64(rate)
-	return &gcraRedisRateLimiter{
-		redis:            redisClient,
-		emissionInterval: emissionInterval,
-		burstAllowance:   float64(burst-1) * emissionInterval,
-		burst:            burst,
+
+	allowed := result[0] == 1
+	remaining := result[1]
+	retryAfterSec := result[2]
+
+	return &Result{
+		Allowed:    allowed,
+		Remaining:  remaining,
+		Limit:      g.burst,
+		RetryAfter: time.Duration(retryAfterSec) * time.Second,
 	}, nil
 }
 
-// Allow returns (allowed, remaining, limit, retryAfter)
-func (r *gcraRedisRateLimiter) Allow(ctx context.Context, userID string) (allowed bool, remaining int64, limit int64, retryAfter int64) {
-	limit = r.burst
-	key := fmt.Sprintf("ratelimit:%s", userID)
-	now := float64(time.Now().UnixNano()) / 1e9
-
-	result, err := gcraScript.Run(ctx, r.redis, []string{key},
-		r.emissionInterval,
-		r.burstAllowance,
-		now,
-	).Int64Slice()
-	if err != nil {
-		return true, limit - 1, limit, 0 // fail open
-	}
-
-	allowed = result[0] == 1
-	remaining = result[1]
-	retryAfter = result[2]
-
-	return allowed, remaining, limit, retryAfter
+func (g *gcraRedis) Reset(ctx context.Context, key string) error {
+	fullKey := fmt.Sprintf("%s:%s", g.opts.KeyPrefix, key)
+	return g.redis.Del(ctx, fullKey).Err()
 }

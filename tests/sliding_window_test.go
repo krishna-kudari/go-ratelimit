@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"github.com/krishna-kudari/ratelimit"
+	"github.com/redis/go-redis/v9"
 )
 
-func TestNewSlidingWindowRateLimitter(t *testing.T) {
+func TestNewSlidingWindow(t *testing.T) {
 	tests := []struct {
 		name           string
 		maxRequests    int64
@@ -55,7 +56,7 @@ func TestNewSlidingWindowRateLimitter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			limiter, err := goratelimit.NewSlidingWindowRateLimitter(tt.maxRequests, tt.windowSeconds)
+			limiter, err := goratelimit.NewSlidingWindow(tt.maxRequests, tt.windowSeconds)
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error but got none")
@@ -77,109 +78,126 @@ func TestNewSlidingWindowRateLimitter(t *testing.T) {
 	}
 }
 
-func TestSlidingWindowRateLimiter_Allow(t *testing.T) {
+func TestSlidingWindow_Allow(t *testing.T) {
+	ctx := context.Background()
+	key := "test-key"
+
 	t.Run("allows requests within limit", func(t *testing.T) {
-		limiter, err := goratelimit.NewSlidingWindowRateLimitter(5, 60)
+		limiter, err := goratelimit.NewSlidingWindow(5, 60)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
 		for i := 0; i < 5; i++ {
-			if !limiter.Allow() {
+			res, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !res.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
 		}
 	})
 
 	t.Run("rejects requests exceeding limit", func(t *testing.T) {
-		limiter, err := goratelimit.NewSlidingWindowRateLimitter(3, 60)
+		limiter, err := goratelimit.NewSlidingWindow(3, 60)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Allow 3 requests
 		for i := 0; i < 3; i++ {
-			if !limiter.Allow() {
+			res, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !res.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
 		}
 
-		// 4th request should be rejected
-		if limiter.Allow() {
+		res, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Allowed {
 			t.Error("4th request should be rejected")
 		}
 	})
 
 	t.Run("sliding window removes old timestamps", func(t *testing.T) {
-		limiter, err := goratelimit.NewSlidingWindowRateLimitter(2, 1) // 2 requests per second
+		limiter, err := goratelimit.NewSlidingWindow(2, 1)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Use up the limit
-		if !limiter.Allow() {
+		res, _ := limiter.Allow(ctx, key)
+		if !res.Allowed {
 			t.Error("first request should be allowed")
 		}
-		if !limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if !res.Allowed {
 			t.Error("second request should be allowed")
 		}
-		if limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if res.Allowed {
 			t.Error("third request should be rejected")
 		}
 
-		// Wait for window to slide (oldest timestamp expires)
 		time.Sleep(1100 * time.Millisecond)
 
-		// Should allow requests again as old timestamps are removed
-		if !limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if !res.Allowed {
 			t.Error("request after window slide should be allowed")
 		}
-		if !limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if !res.Allowed {
 			t.Error("second request after window slide should be allowed")
 		}
-		if limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if res.Allowed {
 			t.Error("third request after window slide should be rejected")
 		}
 	})
 
 	t.Run("sliding window allows gradual request flow", func(t *testing.T) {
-		limiter, err := goratelimit.NewSlidingWindowRateLimitter(3, 2) // 3 requests per 2 seconds
+		limiter, err := goratelimit.NewSlidingWindow(3, 2)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Make 3 requests with delays to ensure they expire at different times
 		start := time.Now()
 		for i := 0; i < 3; i++ {
-			if !limiter.Allow() {
+			res, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !res.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
-			time.Sleep(200 * time.Millisecond) // Delay to ensure different timestamps
+			time.Sleep(200 * time.Millisecond)
 		}
-		if limiter.Allow() {
+		res, _ := limiter.Allow(ctx, key)
+		if res.Allowed {
 			t.Error("4th request should be rejected")
 		}
 
-		// Wait for oldest request to expire
-		// First request was at start, expires at start+2s
-		// Wait until we're past that point
 		elapsed := time.Since(start)
 		if elapsed < 2100*time.Millisecond {
 			time.Sleep(2100*time.Millisecond - elapsed)
 		}
 
-		// After oldest expires, should allow one more
-		if !limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if !res.Allowed {
 			t.Error("request after oldest expires should be allowed")
 		}
-		// Should be at limit again now
-		if limiter.Allow() {
+		res, _ = limiter.Allow(ctx, key)
+		if res.Allowed {
 			t.Error("next request should be rejected (at limit)")
 		}
 	})
 
 	t.Run("concurrent access", func(t *testing.T) {
-		limiter, err := goratelimit.NewSlidingWindowRateLimitter(100, 60)
+		limiter, err := goratelimit.NewSlidingWindow(100, 60)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -187,7 +205,8 @@ func TestSlidingWindowRateLimiter_Allow(t *testing.T) {
 		allowed := make(chan bool, 200)
 		for i := 0; i < 200; i++ {
 			go func() {
-				allowed <- limiter.Allow()
+				res, _ := limiter.Allow(ctx, key)
+				allowed <- res.Allowed
 			}()
 		}
 
@@ -204,118 +223,117 @@ func TestSlidingWindowRateLimiter_Allow(t *testing.T) {
 	})
 }
 
-func TestSlidingWindowRedisRateLimiter_Allow(t *testing.T) {
-	// Skip if Redis is not available
+func TestSlidingWindow_Allow_Redis(t *testing.T) {
 	ctx := context.Background()
-	limiter, err := goratelimit.NewSlidingWindowRedisRateLimiter(ctx, 10, 60)
-	if err != nil {
+	client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	if err := client.Ping(ctx).Err(); err != nil {
 		t.Skipf("Redis not available: %v", err)
 	}
 
+	limiter, err := goratelimit.NewSlidingWindow(10, 60, goratelimit.WithRedis(client))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	t.Run("allows requests within limit", func(t *testing.T) {
-		userID := "test-sliding-user-1"
-		allowed, remaining, limit, retryAfter := limiter.Allow(ctx, userID)
-		if !allowed {
+		key := fmt.Sprintf("test-sliding-user-1-%d", time.Now().UnixNano())
+		res, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Allowed {
 			t.Error("first request should be allowed")
 		}
-		if remaining < 0 || remaining > limit {
-			t.Errorf("remaining should be between 0 and %d, got %d", limit, remaining)
+		if res.Remaining < 0 || res.Remaining > res.Limit {
+			t.Errorf("remaining should be between 0 and %d, got %d", res.Limit, res.Remaining)
 		}
-		if retryAfter != 0 {
-			t.Errorf("retryAfter should be 0 when allowed, got %d", retryAfter)
+		if res.RetryAfter != 0 {
+			t.Errorf("retryAfter should be 0 when allowed, got %v", res.RetryAfter)
 		}
 	})
 
 	t.Run("rejects requests exceeding limit", func(t *testing.T) {
-		limiter, err := goratelimit.NewSlidingWindowRedisRateLimiter(ctx, 3, 60)
+		key := fmt.Sprintf("test-sliding-user-2-%d", time.Now().UnixNano())
+		limiter, err := goratelimit.NewSlidingWindow(3, 60, goratelimit.WithRedis(client))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Clear any existing data for this user (in case of previous test runs)
-		// Note: This assumes we can access redis, but we can't from test package
-		// So we'll use a unique userID with timestamp to avoid collisions
-		userID := fmt.Sprintf("test-sliding-user-2-%d", time.Now().UnixNano())
-
-		// Make 3 requests
 		for i := 0; i < 3; i++ {
-			allowed, _, _, _ := limiter.Allow(ctx, userID)
-			if !allowed {
+			res, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !res.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
 		}
 
-		// 4th request should be rejected
-		allowed, remaining, _, retryAfter := limiter.Allow(ctx, userID)
-		if allowed {
+		res, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Allowed {
 			t.Error("4th request should be rejected")
 		}
-		if remaining != 0 {
-			t.Errorf("remaining should be 0, got %d", remaining)
+		if res.Remaining != 0 {
+			t.Errorf("remaining should be 0, got %d", res.Remaining)
 		}
-		if retryAfter <= 0 {
-			t.Errorf("retryAfter should be positive, got %d", retryAfter)
+		if res.RetryAfter <= 0 {
+			t.Errorf("retryAfter should be positive, got %v", res.RetryAfter)
 		}
-		if retryAfter > 60 {
-			t.Errorf("retryAfter should not exceed window, got %d", retryAfter)
+		if res.RetryAfter > 60*time.Second {
+			t.Errorf("retryAfter should not exceed window, got %v", res.RetryAfter)
 		}
 	})
 
 	t.Run("sliding window removes old entries", func(t *testing.T) {
-		userID := "test-sliding-user-3"
-		limiter, err := goratelimit.NewSlidingWindowRedisRateLimiter(ctx, 2, 2) // 2 requests per 2 seconds
+		key := fmt.Sprintf("test-sliding-user-3-%d", time.Now().UnixNano())
+		limiter, err := goratelimit.NewSlidingWindow(2, 2, goratelimit.WithRedis(client))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Use up limit
-		limiter.Allow(ctx, userID)
-		limiter.Allow(ctx, userID)
+		limiter.Allow(ctx, key)
+		limiter.Allow(ctx, key)
 
-		// Should be rejected
-		allowed, _, _, _ := limiter.Allow(ctx, userID)
-		if allowed {
+		res, _ := limiter.Allow(ctx, key)
+		if res.Allowed {
 			t.Error("third request should be rejected")
 		}
 
-		// Wait for window to slide
 		time.Sleep(2100 * time.Millisecond)
 
-		// Should allow again as old entries expire
-		allowed, _, _, _ = limiter.Allow(ctx, userID)
-		if !allowed {
+		res, _ = limiter.Allow(ctx, key)
+		if !res.Allowed {
 			t.Error("request after window slide should be allowed")
 		}
 	})
 
 	t.Run("tracks separate limits per user", func(t *testing.T) {
-		// Use unique user IDs to avoid collisions with previous test runs
 		user1 := fmt.Sprintf("test-sliding-user-4-%d", time.Now().UnixNano())
 		user2 := fmt.Sprintf("test-sliding-user-5-%d", time.Now().UnixNano())
-		limiter, err := goratelimit.NewSlidingWindowRedisRateLimiter(ctx, 2, 60)
+		limiter, err := goratelimit.NewSlidingWindow(2, 60, goratelimit.WithRedis(client))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Use up limit for user1
-		allowed, _, _, _ := limiter.Allow(ctx, user1)
-		if !allowed {
+		res, _ := limiter.Allow(ctx, user1)
+		if !res.Allowed {
 			t.Error("user1 first request should be allowed")
 		}
-		allowed, _, _, _ = limiter.Allow(ctx, user1)
-		if !allowed {
+		res, _ = limiter.Allow(ctx, user1)
+		if !res.Allowed {
 			t.Error("user1 second request should be allowed")
 		}
 
-		// user1 should be rate limited
-		allowed1, _, _, _ := limiter.Allow(ctx, user1)
-		if allowed1 {
+		res1, _ := limiter.Allow(ctx, user1)
+		if res1.Allowed {
 			t.Error("user1 should be rate limited")
 		}
 
-		// user2 should still have full limit
-		allowed2, _, _, _ := limiter.Allow(ctx, user2)
-		if !allowed2 {
+		res2, _ := limiter.Allow(ctx, user2)
+		if !res2.Allowed {
 			t.Error("user2 should not be rate limited")
 		}
 	})

@@ -10,91 +10,161 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// LeakyBucketMode defines the operating mode of a leaky bucket limiter.
 type LeakyBucketMode string
 
 const (
+	// Policing mode drops requests that exceed capacity (hard rejection).
 	Policing LeakyBucketMode = "policing"
-	Shaping  LeakyBucketMode = "shaping"
+	// Shaping mode queues requests and assigns a processing delay.
+	Shaping LeakyBucketMode = "shaping"
 )
 
-// ─── In-Memory ───────────────────────────────────────────────────────────────
-
-type leakyBucketRateLimiter struct {
-	mu       sync.Mutex
-	mode     LeakyBucketMode
-	capacity float64
-	leakRate float64
-
-	// policing state
-	level    float64
-	lastLeak time.Time
-
-	// shaping state
-	nextFree time.Time
+// LeakyBucketResult extends Result with shaping-specific delay information.
+type LeakyBucketResult struct {
+	*Result
+	Delay time.Duration // For shaping mode: how long to wait before processing.
 }
 
-func NewLeakyBucketRateLimiter(capacity int64, leakRate int64, mode LeakyBucketMode) (*leakyBucketRateLimiter, error) {
+// NewLeakyBucket creates a Leaky Bucket rate limiter.
+// capacity is the bucket size. leakRate is tokens leaked per second.
+// mode selects Policing (hard reject) or Shaping (queue with delay).
+// Pass WithRedis for distributed mode; omit for in-memory.
+func NewLeakyBucket(capacity, leakRate int64, mode LeakyBucketMode, opts ...Option) (Limiter, error) {
 	if capacity <= 0 || leakRate <= 0 {
-		return nil, fmt.Errorf("goratelimit: capacity and leakRate must be positive and greater than zero")
+		return nil, fmt.Errorf("goratelimit: capacity and leakRate must be positive")
 	}
-	now := time.Now()
-	return &leakyBucketRateLimiter{
-		mode:     mode,
+	o := applyOptions(opts)
+
+	if o.RedisClient != nil {
+		return &leakyBucketRedis{
+			redis:    o.RedisClient,
+			capacity: capacity,
+			leakRate: leakRate,
+			mode:     mode,
+			opts:     o,
+		}, nil
+	}
+	return &leakyBucketMemory{
+		states:   make(map[string]*leakyBucketState),
 		capacity: float64(capacity),
 		leakRate: float64(leakRate),
-		lastLeak: now,
-		nextFree: now,
+		limit:    capacity,
+		mode:     mode,
+		opts:     o,
 	}, nil
 }
 
-// Allow returns (allowed, remaining, delaySeconds)
-func (r *leakyBucketRateLimiter) Allow() (allowed bool, remaining int64, delay float64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// ─── In-Memory ───────────────────────────────────────────────────────────────
 
-	if r.mode == Policing {
-		return r.allowPolicing()
-	}
-	return r.allowShaping()
+type leakyBucketState struct {
+	// policing
+	level    float64
+	lastLeak time.Time
+	// shaping
+	nextFree time.Time
 }
 
-func (r *leakyBucketRateLimiter) allowPolicing() (allowed bool, remaining int64, delay float64) {
-	now := time.Now()
-
-	elapsed := now.Sub(r.lastLeak).Seconds()
-	leaked := elapsed * r.leakRate
-	r.level = math.Max(0, r.level-leaked)
-	r.lastLeak = now
-
-	remaining = int64(math.Max(0, math.Floor(r.capacity-r.level)))
-
-	if r.level+1 <= r.capacity {
-		r.level++
-		remaining = int64(math.Max(0, math.Floor(r.capacity-r.level)))
-		return true, remaining, 0
-	}
-	return false, 0, math.Ceil(1 / r.leakRate)
+type leakyBucketMemory struct {
+	mu       sync.Mutex
+	states   map[string]*leakyBucketState
+	capacity float64
+	leakRate float64
+	limit    int64
+	mode     LeakyBucketMode
+	opts     *Options
 }
 
-func (r *leakyBucketRateLimiter) allowShaping() (allowed bool, remaining int64, delay float64) {
+func (l *leakyBucketMemory) getState(key string) *leakyBucketState {
+	state, ok := l.states[key]
+	if !ok {
+		now := time.Now()
+		state = &leakyBucketState{lastLeak: now, nextFree: now}
+		l.states[key] = state
+	}
+	return state
+}
+
+func (l *leakyBucketMemory) Allow(ctx context.Context, key string) (*Result, error) {
+	return l.AllowN(ctx, key, 1)
+}
+
+func (l *leakyBucketMemory) AllowN(ctx context.Context, key string, n int) (*Result, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.mode == Shaping {
+		return l.allowShaping(key, n)
+	}
+	return l.allowPolicing(key, n)
+}
+
+func (l *leakyBucketMemory) allowPolicing(key string, n int) (*Result, error) {
+	state := l.getState(key)
 	now := time.Now()
 
-	if r.nextFree.Before(now) {
-		r.nextFree = now
+	elapsed := now.Sub(state.lastLeak).Seconds()
+	leaked := elapsed * l.leakRate
+	state.level = math.Max(0, state.level-leaked)
+	state.lastLeak = now
+
+	cost := float64(n)
+	if state.level+cost <= l.capacity {
+		state.level += cost
+		remaining := int64(math.Max(0, math.Floor(l.capacity-state.level)))
+		return &Result{
+			Allowed:   true,
+			Remaining: remaining,
+			Limit:     l.limit,
+		}, nil
 	}
 
-	delayDuration := r.nextFree.Sub(now).Seconds()
-	queueDepth := delayDuration * r.leakRate
-	remaining = int64(math.Max(0, math.Floor(r.capacity-queueDepth)))
+	retryAfter := time.Duration(math.Ceil(cost/l.leakRate) * float64(time.Second))
+	return &Result{
+		Allowed:    false,
+		Remaining:  0,
+		Limit:      l.limit,
+		RetryAfter: retryAfter,
+	}, nil
+}
 
-	if queueDepth+1 <= r.capacity {
-		delay = delayDuration
-		r.nextFree = r.nextFree.Add(time.Duration(float64(time.Second) / r.leakRate))
-		queueDepth++
-		remaining = int64(math.Max(0, math.Floor(r.capacity-queueDepth)))
-		return true, remaining, delay
+func (l *leakyBucketMemory) allowShaping(key string, n int) (*Result, error) {
+	state := l.getState(key)
+	now := time.Now()
+
+	if state.nextFree.Before(now) {
+		state.nextFree = now
 	}
-	return false, 0, 0
+
+	delayDuration := state.nextFree.Sub(now).Seconds()
+	queueDepth := delayDuration * l.leakRate
+	cost := float64(n)
+
+	if queueDepth+cost <= l.capacity {
+		delay := time.Duration(delayDuration * float64(time.Second))
+		state.nextFree = state.nextFree.Add(time.Duration(cost / l.leakRate * float64(time.Second)))
+		queueDepth += cost
+		remaining := int64(math.Max(0, math.Floor(l.capacity-queueDepth)))
+		return &Result{
+			Allowed:    true,
+			Remaining:  remaining,
+			Limit:      l.limit,
+			RetryAfter: delay,
+		}, nil
+	}
+
+	return &Result{
+		Allowed:   false,
+		Remaining: 0,
+		Limit:     l.limit,
+	}, nil
+}
+
+func (l *leakyBucketMemory) Reset(ctx context.Context, key string) error {
+	l.mu.Lock()
+	delete(l.states, key)
+	l.mu.Unlock()
+	return nil
 }
 
 // ─── Redis ────────────────────────────────────────────────────────────────────
@@ -104,6 +174,7 @@ local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
 local leak_rate = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
+local cost = tonumber(ARGV[4])
 
 local data = redis.call('HGETALL', key)
 local level = 0
@@ -124,17 +195,20 @@ level = math.max(0, level - leaked)
 
 local allowed = 0
 local remaining = math.max(0, math.floor(capacity - level))
+local retry_after = 0
 
-if level + 1 <= capacity then
-  level = level + 1
+if level + cost <= capacity then
+  level = level + cost
   remaining = math.max(0, math.floor(capacity - level))
   allowed = 1
+else
+  retry_after = math.ceil(cost / leak_rate)
 end
 
 redis.call('HSET', key, 'level', tostring(level), 'last_leak', tostring(now))
 redis.call('EXPIRE', key, math.ceil(capacity / leak_rate) + 1)
 
-return { allowed, remaining, 0 }
+return { allowed, remaining, retry_after }
 `)
 
 var luaShaping = redis.NewScript(`
@@ -142,6 +216,7 @@ local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
 local leak_rate = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
+local cost = tonumber(ARGV[4])
 
 local data = redis.call('HGETALL', key)
 local next_free = now
@@ -165,11 +240,11 @@ local allowed = 0
 local remaining = math.max(0, math.floor(capacity - queue_depth))
 local delay_ms = 0
 
-if queue_depth + 1 <= capacity then
+if queue_depth + cost <= capacity then
   delay_ms = math.floor(delay * 1000)
-  next_free = next_free + (1 / leak_rate)
+  next_free = next_free + (cost / leak_rate)
   allowed = 1
-  queue_depth = queue_depth + 1
+  queue_depth = queue_depth + cost
   remaining = math.max(0, math.floor(capacity - queue_depth))
 end
 
@@ -179,70 +254,62 @@ redis.call('EXPIRE', key, math.ceil(capacity / leak_rate) + 1)
 return { allowed, remaining, delay_ms }
 `)
 
-type leakyBucketRedisRateLimiter struct {
+type leakyBucketRedis struct {
 	redis    *redis.Client
 	capacity int64
 	leakRate int64
 	mode     LeakyBucketMode
+	opts     *Options
 }
 
-func NewLeakyBucketRedisRateLimiter(ctx context.Context, capacity int64, leakRate int64, mode LeakyBucketMode) (*leakyBucketRedisRateLimiter, error) {
-	if capacity <= 0 || leakRate <= 0 {
-		return nil, fmt.Errorf("goratelimit: capacity and leakRate must be positive and greater than zero")
-	}
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       0,
-		Protocol: 2,
-	})
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("goratelimit: redis connection failed: %w", err)
-	}
-	return &leakyBucketRedisRateLimiter{
-		redis:    redisClient,
-		capacity: capacity,
-		leakRate: leakRate,
-		mode:     mode,
-	}, nil
+func (l *leakyBucketRedis) Allow(ctx context.Context, key string) (*Result, error) {
+	return l.AllowN(ctx, key, 1)
 }
 
-// Allow returns (allowed, remaining, limit, retryAfter, delaySeconds)
-func (r *leakyBucketRedisRateLimiter) Allow(ctx context.Context, userID string) (allowed bool, remaining int64, limit int64, retryAfter int64, delay float64) {
-	capacity, leakRate := r.capacity, r.leakRate
-	limit = capacity
-
-	key := fmt.Sprintf("ratelimit:%s", userID)
+func (l *leakyBucketRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
+	fullKey := fmt.Sprintf("%s:%s", l.opts.KeyPrefix, key)
 	now := float64(time.Now().UnixNano()) / 1e9
 
 	script := luaPolicing
-	if r.mode == Shaping {
+	if l.mode == Shaping {
 		script = luaShaping
 	}
 
-	result, err := script.Run(ctx, r.redis, []string{key},
-		capacity,
-		leakRate,
+	result, err := script.Run(ctx, l.redis, []string{fullKey},
+		l.capacity,
+		l.leakRate,
 		now,
+		n,
 	).Int64Slice()
 	if err != nil {
-		return true, limit - 1, limit, 0, 0 // fail open
-	}
-
-	allowed = result[0] == 1
-	remaining = result[1]
-	delayMs := result[2]
-
-	if !allowed && r.mode == Policing {
-		retryAfter = int64(math.Ceil(1.0 / float64(leakRate)))
-		if retryAfter < 1 {
-			retryAfter = 1
+		if l.opts.FailOpen {
+			return &Result{Allowed: true, Remaining: l.capacity - 1, Limit: l.capacity}, nil
 		}
+		return &Result{Allowed: false, Remaining: 0, Limit: l.capacity}, fmt.Errorf("goratelimit: redis error: %w", err)
 	}
 
-	if delayMs > 0 {
-		delay = float64(delayMs) / 1000
+	allowed := result[0] == 1
+	remaining := result[1]
+
+	r := &Result{
+		Allowed:   allowed,
+		Remaining: remaining,
+		Limit:     l.capacity,
 	}
 
-	return allowed, remaining, limit, retryAfter, delay
+	if l.mode == Policing && !allowed {
+		retryAfterSec := result[2]
+		r.RetryAfter = time.Duration(retryAfterSec) * time.Second
+	}
+	if l.mode == Shaping && allowed {
+		delayMs := result[2]
+		r.RetryAfter = time.Duration(delayMs) * time.Millisecond
+	}
+
+	return r, nil
+}
+
+func (l *leakyBucketRedis) Reset(ctx context.Context, key string) error {
+	fullKey := fmt.Sprintf("%s:%s", l.opts.KeyPrefix, key)
+	return l.redis.Del(ctx, fullKey).Err()
 }

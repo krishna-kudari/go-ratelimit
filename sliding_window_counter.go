@@ -11,142 +11,193 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type slidingWindowCounterRateLimiter struct {
-	mu            sync.Mutex
-	maxRequests   int64
-	windowSeconds int64
+// NewSlidingWindowCounter creates a Sliding Window Counter rate limiter.
+// This uses the weighted-counter approximation (~1% error) with O(1) memory per key.
+// maxRequests is the maximum requests allowed per window.
+// windowSeconds is the window duration in seconds.
+// Pass WithRedis for distributed mode; omit for in-memory.
+func NewSlidingWindowCounter(maxRequests, windowSeconds int64, opts ...Option) (Limiter, error) {
+	if maxRequests <= 0 || windowSeconds <= 0 {
+		return nil, fmt.Errorf("goratelimit: maxRequests and windowSeconds must be positive")
+	}
+	o := applyOptions(opts)
+
+	if o.RedisClient != nil {
+		return &slidingWindowCounterRedis{
+			redis:         o.RedisClient,
+			maxRequests:   maxRequests,
+			windowSeconds: windowSeconds,
+			opts:          o,
+		}, nil
+	}
+	return &slidingWindowCounterMemory{
+		states:        make(map[string]*slidingWindowCounterState),
+		maxRequests:   maxRequests,
+		windowSeconds: windowSeconds,
+		opts:          o,
+	}, nil
+}
+
+// ─── In-Memory ───────────────────────────────────────────────────────────────
+
+type slidingWindowCounterState struct {
 	windowStart   time.Time
 	previousCount int64
 	currentCount  int64
 }
 
-func (r *slidingWindowCounterRateLimiter) Allow() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+type slidingWindowCounterMemory struct {
+	mu            sync.Mutex
+	states        map[string]*slidingWindowCounterState
+	maxRequests   int64
+	windowSeconds int64
+	opts          *Options
+}
+
+func (s *slidingWindowCounterMemory) Allow(ctx context.Context, key string) (*Result, error) {
+	return s.AllowN(ctx, key, 1)
+}
+
+func (s *slidingWindowCounterMemory) AllowN(ctx context.Context, key string, n int) (*Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.states[key]
+	if !ok {
+		state = &slidingWindowCounterState{windowStart: time.Now()}
+		s.states[key] = state
+	}
 
 	now := time.Now()
-	windowDuration := time.Duration(r.windowSeconds) * time.Second
+	windowDuration := time.Duration(s.windowSeconds) * time.Second
 
-	// Use for loop to handle multiple elapsed windows
-	for now.Sub(r.windowStart) >= windowDuration {
-		r.previousCount = r.currentCount
-		r.currentCount = 0
-		r.windowStart = r.windowStart.Add(windowDuration) // ← key fix
+	for now.Sub(state.windowStart) >= windowDuration {
+		state.previousCount = state.currentCount
+		state.currentCount = 0
+		state.windowStart = state.windowStart.Add(windowDuration)
 	}
 
-	elapsedFraction := now.Sub(r.windowStart).Seconds() / float64(r.windowSeconds)
-	prevCount := float64(r.previousCount) * (1 - elapsedFraction)
-	count := prevCount + float64(r.currentCount)
+	elapsedFraction := now.Sub(state.windowStart).Seconds() / float64(s.windowSeconds)
+	prevWeight := float64(state.previousCount) * (1 - elapsedFraction)
+	estimatedCount := prevWeight + float64(state.currentCount)
 
-	if count < float64(r.maxRequests) {
-		r.currentCount++
-		return true
+	cost := float64(n)
+	if estimatedCount+cost <= float64(s.maxRequests) {
+		state.currentCount += int64(n)
+		newEstimate := prevWeight + float64(state.currentCount)
+		remaining := int64(math.Max(0, math.Floor(float64(s.maxRequests)-newEstimate)))
+		return &Result{
+			Allowed:   true,
+			Remaining: remaining,
+			Limit:     s.maxRequests,
+		}, nil
 	}
-	return false
-}
 
-func NewslidingWindowCounterRateLimitter(max_requests int64, window_seconds int64) (*slidingWindowCounterRateLimiter, error) {
-	if max_requests <= 0 || window_seconds <= 0 {
-		return nil, fmt.Errorf("goratelimit.NewFixedWindowRateLimitter: max_requests and window_seconds must be positive and greater than zero")
+	retryAfter := time.Duration(math.Ceil(float64(s.windowSeconds)*(1-elapsedFraction))) * time.Second
+	if retryAfter < time.Second {
+		retryAfter = time.Second
 	}
-	return &slidingWindowCounterRateLimiter{
-		maxRequests:   max_requests,
-		windowSeconds: window_seconds,
-		windowStart:   time.Now(),
-		previousCount: 0,
-		currentCount:  0,
+	return &Result{
+		Allowed:    false,
+		Remaining:  0,
+		Limit:      s.maxRequests,
+		RetryAfter: retryAfter,
 	}, nil
 }
 
-type slidingWindowCounterRateLimitStore struct {
-	mu       sync.Mutex
-	limiters map[string]*slidingWindowCounterRateLimiter
+func (s *slidingWindowCounterMemory) Reset(ctx context.Context, key string) error {
+	s.mu.Lock()
+	delete(s.states, key)
+	s.mu.Unlock()
+	return nil
 }
 
-func (r *slidingWindowCounterRateLimitStore) Allow(ctx context.Context, useId string) bool {
+// ─── Redis ────────────────────────────────────────────────────────────────────
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, ok := r.limiters[useId]; !ok {
-		r.limiters[useId], _ = NewslidingWindowCounterRateLimitter(100, 60)
-	}
-	return r.limiters[useId].Allow()
-}
-
-type slidingWindowCounterRedisRateLimiter struct {
+type slidingWindowCounterRedis struct {
 	redis         *redis.Client
-	MaxRequests   int64
-	WindowSeconds int64
+	maxRequests   int64
+	windowSeconds int64
+	opts          *Options
 }
 
-func NewslidingWindowCounterRedisRateLimiter(ctx context.Context, max_requests int64, window_seconds int64) (*slidingWindowCounterRedisRateLimiter, error) {
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       0,
-		Protocol: 2,
-	})
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("redis connection failed: %w", err)
-	}
-	return &slidingWindowCounterRedisRateLimiter{
-		redis:         redisClient,
-		MaxRequests:   max_requests,
-		WindowSeconds: window_seconds,
-	}, nil
+func (s *slidingWindowCounterRedis) Allow(ctx context.Context, key string) (*Result, error) {
+	return s.AllowN(ctx, key, 1)
 }
 
-func (r *slidingWindowCounterRedisRateLimiter) Allow(ctx context.Context, userID string) (allowed bool, remaining int64, limit int64, retryAfter int64) {
-	maxRequests, windowSeconds := r.MaxRequests, r.WindowSeconds
-	limit = maxRequests
-
+func (s *slidingWindowCounterRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
 	now := time.Now().Unix()
-	currentWindow := now / windowSeconds
+	currentWindow := now / s.windowSeconds
 	previousWindow := currentWindow - 1
+	elapsed := float64(now%s.windowSeconds) / float64(s.windowSeconds)
 
-	currentKey := fmt.Sprintf("ratelimit:%s:%d", userID, currentWindow)
-	previousKey := fmt.Sprintf("ratelimit:%s:%d", userID, previousWindow)
+	prefix := s.opts.KeyPrefix
+	currentKey := fmt.Sprintf("%s:%s:%d", prefix, key, currentWindow)
+	previousKey := fmt.Sprintf("%s:%s:%d", prefix, key, previousWindow)
 
-	elapsed := float64(now%windowSeconds) / float64(windowSeconds)
-
-	prevStr, err := r.redis.Get(ctx, previousKey).Result()
+	prevStr, err := s.redis.Get(ctx, previousKey).Result()
 	if err != nil && err != redis.Nil {
-		return true, maxRequests - 1, maxRequests, 0 // fail open
+		return s.failResult(err)
 	}
 	prevCount, _ := strconv.ParseFloat(prevStr, 64)
-
 	weightedPrev := prevCount * (1 - elapsed)
 
-	currStr, err := r.redis.Get(ctx, currentKey).Result()
+	currStr, err := s.redis.Get(ctx, currentKey).Result()
 	if err != nil && err != redis.Nil {
-		return true, maxRequests - 1, maxRequests, 0 // fail open
+		return s.failResult(err)
 	}
 	currentCount, _ := strconv.ParseFloat(currStr, 64)
 
 	estimatedCount := weightedPrev + currentCount
+	cost := float64(n)
 
-	if estimatedCount >= float64(maxRequests) {
-		retryAfter = int64(math.Ceil(float64(windowSeconds) * (1 - elapsed)))
+	if estimatedCount+cost > float64(s.maxRequests) {
+		retryAfter := int64(math.Ceil(float64(s.windowSeconds) * (1 - elapsed)))
 		if retryAfter < 1 {
 			retryAfter = 1
 		}
-		if retryAfter > windowSeconds {
-			retryAfter = windowSeconds
+		if retryAfter > s.windowSeconds {
+			retryAfter = s.windowSeconds
 		}
-		return false, 0, maxRequests, retryAfter
+		return &Result{
+			Allowed:    false,
+			Remaining:  0,
+			Limit:      s.maxRequests,
+			RetryAfter: time.Duration(retryAfter) * time.Second,
+		}, nil
 	}
 
-	newCount, err := r.redis.Incr(ctx, currentKey).Result()
+	newCount, err := s.redis.IncrBy(ctx, currentKey, int64(n)).Result()
 	if err != nil {
-		return true, maxRequests - 1, maxRequests, 0
+		return s.failResult(err)
 	}
-	if newCount == 1 {
-		r.redis.Expire(ctx, currentKey, time.Duration(windowSeconds*2)*time.Second)
+	if newCount == int64(n) {
+		s.redis.Expire(ctx, currentKey, time.Duration(s.windowSeconds*2)*time.Second)
 	}
 
 	newEstimate := weightedPrev + float64(newCount)
-	remaining = int64(math.Max(0, math.Floor(float64(maxRequests)-newEstimate)))
+	remaining := int64(math.Max(0, math.Floor(float64(s.maxRequests)-newEstimate)))
 
-	return true, remaining, maxRequests, 0
+	return &Result{
+		Allowed:   true,
+		Remaining: remaining,
+		Limit:     s.maxRequests,
+	}, nil
+}
+
+func (s *slidingWindowCounterRedis) Reset(ctx context.Context, key string) error {
+	now := time.Now().Unix()
+	currentWindow := now / s.windowSeconds
+	previousWindow := currentWindow - 1
+	prefix := s.opts.KeyPrefix
+	currentKey := fmt.Sprintf("%s:%s:%d", prefix, key, currentWindow)
+	previousKey := fmt.Sprintf("%s:%s:%d", prefix, key, previousWindow)
+	return s.redis.Del(ctx, currentKey, previousKey).Err()
+}
+
+func (s *slidingWindowCounterRedis) failResult(err error) (*Result, error) {
+	if s.opts.FailOpen {
+		return &Result{Allowed: true, Remaining: s.maxRequests - 1, Limit: s.maxRequests}, nil
+	}
+	return &Result{Allowed: false, Remaining: 0, Limit: s.maxRequests}, fmt.Errorf("goratelimit: redis error: %w", err)
 }

@@ -3,13 +3,15 @@ package goratelimit_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/krishna-kudari/ratelimit"
+	"github.com/redis/go-redis/v9"
 )
 
-func TestNewLeakyBucketRateLimiter(t *testing.T) {
+func TestNewLeakyBucket(t *testing.T) {
 	tests := []struct {
 		name           string
 		capacity       int64
@@ -68,11 +70,11 @@ func TestNewLeakyBucketRateLimiter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			limiter, err := goratelimit.NewLeakyBucketRateLimiter(tt.capacity, tt.leakRate, tt.mode)
+			limiter, err := goratelimit.NewLeakyBucket(tt.capacity, tt.leakRate, tt.mode)
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error but got none")
-				} else if tt.errorSubstring != "" && !contains(err.Error(), tt.errorSubstring) {
+				} else if tt.errorSubstring != "" && !strings.Contains(err.Error(), tt.errorSubstring) {
 					t.Errorf("expected error to contain %q, got %q", tt.errorSubstring, err.Error())
 				}
 				if limiter != nil {
@@ -90,121 +92,120 @@ func TestNewLeakyBucketRateLimiter(t *testing.T) {
 	}
 }
 
-func TestLeakyBucketRateLimiter_Allow_Policing(t *testing.T) {
+func TestLeakyBucket_Allow_Policing(t *testing.T) {
+	ctx := context.Background()
+	key := "test"
+
 	t.Run("allows requests within capacity", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(5, 60, goratelimit.Policing)
+		limiter, err := goratelimit.NewLeakyBucket(5, 60, goratelimit.Policing)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
 		for i := 0; i < 5; i++ {
-			allowed, remaining, delay := limiter.Allow()
-			if !allowed {
+			result, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !result.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
-			if remaining < 0 {
-				t.Errorf("remaining should be non-negative, got %d", remaining)
+			if result.Remaining < 0 {
+				t.Errorf("remaining should be non-negative, got %d", result.Remaining)
 			}
-			if delay != 0 {
-				t.Errorf("delay should be 0 when allowed, got %f", delay)
+			if result.RetryAfter != 0 {
+				t.Errorf("retryAfter should be 0 when allowed, got %v", result.RetryAfter)
 			}
 		}
 	})
 
 	t.Run("rejects requests when bucket is full", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(3, 60, goratelimit.Policing)
+		limiter, err := goratelimit.NewLeakyBucket(3, 60, goratelimit.Policing)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Fill up the bucket
 		for i := 0; i < 3; i++ {
-			allowed, _, _ := limiter.Allow()
-			if !allowed {
+			result, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !result.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
 		}
 
-		// 4th request should be rejected
-		allowed, remaining, delay := limiter.Allow()
-		if allowed {
+		result, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Allowed {
 			t.Error("4th request should be rejected")
 		}
-		if remaining != 0 {
-			t.Errorf("remaining should be 0 when rejected, got %d", remaining)
+		if result.Remaining != 0 {
+			t.Errorf("remaining should be 0 when rejected, got %d", result.Remaining)
 		}
-		if delay <= 0 {
-			t.Errorf("delay should be positive when rejected, got %f", delay)
+		if result.RetryAfter <= 0 {
+			t.Errorf("retryAfter should be positive when rejected, got %v", result.RetryAfter)
 		}
 	})
 
 	t.Run("leaks tokens over time", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(2, 2, goratelimit.Policing) // 2 capacity, 2 per second leak rate
+		limiter, err := goratelimit.NewLeakyBucket(2, 2, goratelimit.Policing)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Fill up the bucket
-		if allowed, _, _ := limiter.Allow(); !allowed {
+		if result, _ := limiter.Allow(ctx, key); !result.Allowed {
 			t.Error("first request should be allowed")
 		}
-		if allowed, _, _ := limiter.Allow(); !allowed {
+		if result, _ := limiter.Allow(ctx, key); !result.Allowed {
 			t.Error("second request should be allowed")
 		}
-		if allowed, _, _ := limiter.Allow(); allowed {
+		if result, _ := limiter.Allow(ctx, key); result.Allowed {
 			t.Error("third request should be rejected")
 		}
 
-		// Wait for tokens to leak (1 second should leak 2 tokens)
 		time.Sleep(1100 * time.Millisecond)
 
-		// Should allow requests again after leak
-		allowed, _, _ := limiter.Allow()
-		if !allowed {
+		if result, _ := limiter.Allow(ctx, key); !result.Allowed {
 			t.Error("request after leak should be allowed")
 		}
-		allowed, _, _ = limiter.Allow()
-		if !allowed {
+		if result, _ := limiter.Allow(ctx, key); !result.Allowed {
 			t.Error("second request after leak should be allowed")
 		}
-		allowed, _, _ = limiter.Allow()
-		if allowed {
+		if result, _ := limiter.Allow(ctx, key); result.Allowed {
 			t.Error("third request after leak should be rejected")
 		}
 	})
 
 	t.Run("gradual leak allows steady request flow", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(10, 10, goratelimit.Policing) // 10 capacity, 10 per second leak rate
+		limiter, err := goratelimit.NewLeakyBucket(10, 10, goratelimit.Policing)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Fill up the bucket
 		for i := 0; i < 10; i++ {
-			if allowed, _, _ := limiter.Allow(); !allowed {
+			if result, _ := limiter.Allow(ctx, key); !result.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
 		}
-		if allowed, _, _ := limiter.Allow(); allowed {
+		if result, _ := limiter.Allow(ctx, key); result.Allowed {
 			t.Error("11th request should be rejected")
 		}
 
-		// Wait for partial leak (0.1 second = 1 token)
 		time.Sleep(110 * time.Millisecond)
 
-		// Should allow one more request
-		allowed, _, _ := limiter.Allow()
-		if !allowed {
+		if result, _ := limiter.Allow(ctx, key); !result.Allowed {
 			t.Error("request after partial leak should be allowed")
 		}
-		allowed, _, _ = limiter.Allow()
-		if allowed {
+		if result, _ := limiter.Allow(ctx, key); result.Allowed {
 			t.Error("next request should be rejected (only 1 token leaked)")
 		}
 	})
 
 	t.Run("concurrent access", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(100, 60, goratelimit.Policing)
+		limiter, err := goratelimit.NewLeakyBucket(100, 60, goratelimit.Policing)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -212,8 +213,8 @@ func TestLeakyBucketRateLimiter_Allow_Policing(t *testing.T) {
 		allowed := make(chan bool, 200)
 		for i := 0; i < 200; i++ {
 			go func() {
-				allowedVal, _, _ := limiter.Allow()
-				allowed <- allowedVal
+				result, _ := limiter.Allow(ctx, key)
+				allowed <- result.Allowed
 			}()
 		}
 
@@ -224,180 +225,197 @@ func TestLeakyBucketRateLimiter_Allow_Policing(t *testing.T) {
 			}
 		}
 
-		// Should allow exactly capacity (100) requests
 		if count != 100 {
 			t.Errorf("expected exactly 100 allowed requests, got %d", count)
 		}
 	})
 
 	t.Run("remaining count decreases as bucket fills", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(5, 60, goratelimit.Policing)
+		limiter, err := goratelimit.NewLeakyBucket(5, 60, goratelimit.Policing)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
 		prevRemaining := int64(5)
 		for i := 0; i < 5; i++ {
-			_, remaining, _ := limiter.Allow()
-			if remaining >= prevRemaining {
-				t.Errorf("remaining should decrease, got %d (previous: %d)", remaining, prevRemaining)
+			result, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
-			prevRemaining = remaining
+			if result.Remaining >= prevRemaining {
+				t.Errorf("remaining should decrease, got %d (previous: %d)", result.Remaining, prevRemaining)
+			}
+			prevRemaining = result.Remaining
 		}
 	})
 
 	t.Run("level never exceeds capacity", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(5, 100, goratelimit.Policing) // High leak rate
+		limiter, err := goratelimit.NewLeakyBucket(5, 100, goratelimit.Policing)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Fill up the bucket
 		for i := 0; i < 5; i++ {
-			limiter.Allow()
+			limiter.Allow(ctx, key)
 		}
 
-		// Wait long enough that leak would exceed capacity
 		time.Sleep(200 * time.Millisecond)
 
-		// Should only allow up to capacity, not more
 		allowedCount := 0
 		for i := 0; i < 10; i++ {
-			allowed, _, _ := limiter.Allow()
-			if allowed {
+			result, _ := limiter.Allow(ctx, key)
+			if result.Allowed {
 				allowedCount++
 			}
 		}
 
-		// Should allow exactly capacity (5) tokens
 		if allowedCount != 5 {
 			t.Errorf("expected exactly 5 allowed requests (capacity), got %d", allowedCount)
 		}
 	})
 }
 
-func TestLeakyBucketRateLimiter_Allow_Shaping(t *testing.T) {
+func TestLeakyBucket_Allow_Shaping(t *testing.T) {
+	ctx := context.Background()
+	key := "test"
+
 	t.Run("allows requests within capacity with delay", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(5, 5, goratelimit.Shaping) // 5 capacity, 5 per second leak rate
+		limiter, err := goratelimit.NewLeakyBucket(5, 5, goratelimit.Shaping)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// First request should have no delay
-		allowed, remaining, delay := limiter.Allow()
-		if !allowed {
+		result, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.Allowed {
 			t.Error("first request should be allowed")
 		}
-		if delay != 0 {
-			t.Errorf("first request should have no delay, got %f", delay)
+		if result.RetryAfter != 0 {
+			t.Errorf("first request should have no delay, got %v", result.RetryAfter)
 		}
-		if remaining < 0 {
-			t.Errorf("remaining should be non-negative, got %d", remaining)
+		if result.Remaining < 0 {
+			t.Errorf("remaining should be non-negative, got %d", result.Remaining)
 		}
 
-		// Subsequent requests should have increasing delays
-		prevDelay := delay
+		prevDelay := result.RetryAfter
 		for i := 0; i < 4; i++ {
-			allowed, remaining, delay := limiter.Allow()
-			if !allowed {
+			result, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !result.Allowed {
 				t.Errorf("request %d should be allowed", i+2)
 			}
-			if delay <= prevDelay {
-				t.Errorf("delay should increase, got %f (previous: %f)", delay, prevDelay)
+			if result.RetryAfter <= prevDelay {
+				t.Errorf("delay should increase, got %v (previous: %v)", result.RetryAfter, prevDelay)
 			}
-			if remaining < 0 {
-				t.Errorf("remaining should be non-negative, got %d", remaining)
+			if result.Remaining < 0 {
+				t.Errorf("remaining should be non-negative, got %d", result.Remaining)
 			}
-			prevDelay = delay
+			prevDelay = result.RetryAfter
 		}
 	})
 
 	t.Run("rejects requests when queue is full", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(3, 60, goratelimit.Shaping)
+		limiter, err := goratelimit.NewLeakyBucket(3, 60, goratelimit.Shaping)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Fill up the queue
 		for i := 0; i < 3; i++ {
-			allowed, _, _ := limiter.Allow()
-			if !allowed {
+			result, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !result.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
 		}
 
-		// 4th request should be rejected
-		allowed, remaining, delay := limiter.Allow()
-		if allowed {
+		result, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Allowed {
 			t.Error("4th request should be rejected")
 		}
-		if remaining != 0 {
-			t.Errorf("remaining should be 0 when rejected, got %d", remaining)
+		if result.Remaining != 0 {
+			t.Errorf("remaining should be 0 when rejected, got %d", result.Remaining)
 		}
-		if delay != 0 {
-			t.Errorf("delay should be 0 when rejected, got %f", delay)
+		if result.RetryAfter != 0 {
+			t.Errorf("retryAfter should be 0 when rejected, got %v", result.RetryAfter)
 		}
 	})
 
 	t.Run("delays requests based on queue depth", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(5, 5, goratelimit.Shaping) // 5 capacity, 5 per second leak rate
+		limiter, err := goratelimit.NewLeakyBucket(5, 5, goratelimit.Shaping)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// First request: no delay
-		_, _, delay1 := limiter.Allow()
-		if delay1 != 0 {
-			t.Errorf("first request should have no delay, got %f", delay1)
+		result1, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result1.RetryAfter != 0 {
+			t.Errorf("first request should have no delay, got %v", result1.RetryAfter)
 		}
 
-		// Second request: should have delay of ~0.2 seconds (1/5)
-		_, _, delay2 := limiter.Allow()
+		result2, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		expectedDelay := 1.0 / 5.0
-		if delay2 < expectedDelay*0.9 || delay2 > expectedDelay*1.1 {
-			t.Errorf("expected delay ~%f, got %f", expectedDelay, delay2)
+		delay2Sec := result2.RetryAfter.Seconds()
+		if delay2Sec < expectedDelay*0.9 || delay2Sec > expectedDelay*1.1 {
+			t.Errorf("expected delay ~%f, got %f", expectedDelay, delay2Sec)
 		}
 
-		// Third request: should have delay of ~0.4 seconds (2/5)
-		_, _, delay3 := limiter.Allow()
+		result3, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		expectedDelay = 2.0 / 5.0
-		if delay3 < expectedDelay*0.9 || delay3 > expectedDelay*1.1 {
-			t.Errorf("expected delay ~%f, got %f", expectedDelay, delay3)
+		delay3Sec := result3.RetryAfter.Seconds()
+		if delay3Sec < expectedDelay*0.9 || delay3Sec > expectedDelay*1.1 {
+			t.Errorf("expected delay ~%f, got %f", expectedDelay, delay3Sec)
 		}
 	})
 
 	t.Run("queue drains over time", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(2, 2, goratelimit.Shaping) // 2 capacity, 2 per second leak rate
+		limiter, err := goratelimit.NewLeakyBucket(2, 2, goratelimit.Shaping)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Fill up the queue
-		if allowed, _, _ := limiter.Allow(); !allowed {
+		if result, _ := limiter.Allow(ctx, key); !result.Allowed {
 			t.Error("first request should be allowed")
 		}
-		if allowed, _, _ := limiter.Allow(); !allowed {
+		if result, _ := limiter.Allow(ctx, key); !result.Allowed {
 			t.Error("second request should be allowed")
 		}
-		if allowed, _, _ := limiter.Allow(); allowed {
+		if result, _ := limiter.Allow(ctx, key); result.Allowed {
 			t.Error("third request should be rejected")
 		}
 
-		// Wait for queue to drain (1 second should drain 2 requests)
 		time.Sleep(1100 * time.Millisecond)
 
-		// Should allow requests again after drain
-		allowed, _, delay := limiter.Allow()
-		if !allowed {
+		result, err := limiter.Allow(ctx, key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.Allowed {
 			t.Error("request after drain should be allowed")
 		}
-		if delay != 0 {
-			t.Errorf("delay should be 0 after drain, got %f", delay)
+		if result.RetryAfter != 0 {
+			t.Errorf("delay should be 0 after drain, got %v", result.RetryAfter)
 		}
 	})
 
 	t.Run("concurrent access", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(100, 60, goratelimit.Shaping)
+		limiter, err := goratelimit.NewLeakyBucket(100, 60, goratelimit.Shaping)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -405,8 +423,8 @@ func TestLeakyBucketRateLimiter_Allow_Shaping(t *testing.T) {
 		allowed := make(chan bool, 200)
 		for i := 0; i < 200; i++ {
 			go func() {
-				allowedVal, _, _ := limiter.Allow()
-				allowed <- allowedVal
+				result, _ := limiter.Allow(ctx, key)
+				allowed <- result.Allowed
 			}()
 		}
 
@@ -417,54 +435,62 @@ func TestLeakyBucketRateLimiter_Allow_Shaping(t *testing.T) {
 			}
 		}
 
-		// Should allow exactly capacity (100) requests
 		if count != 100 {
 			t.Errorf("expected exactly 100 allowed requests, got %d", count)
 		}
 	})
 
 	t.Run("remaining count decreases as queue fills", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRateLimiter(5, 60, goratelimit.Shaping)
+		limiter, err := goratelimit.NewLeakyBucket(5, 60, goratelimit.Shaping)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
 		prevRemaining := int64(5)
 		for i := 0; i < 5; i++ {
-			_, remaining, _ := limiter.Allow()
-			if remaining >= prevRemaining {
-				t.Errorf("remaining should decrease, got %d (previous: %d)", remaining, prevRemaining)
+			result, err := limiter.Allow(ctx, key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
-			prevRemaining = remaining
+			if result.Remaining >= prevRemaining {
+				t.Errorf("remaining should decrease, got %d (previous: %d)", result.Remaining, prevRemaining)
+			}
+			prevRemaining = result.Remaining
 		}
 	})
 }
 
-func TestNewLeakyBucketRedisRateLimiter(t *testing.T) {
-	ctx := context.Background()
+func newRedisLeakyBucket(t *testing.T, capacity, leakRate int64, mode goratelimit.LeakyBucketMode) goratelimit.Limiter {
+	t.Helper()
+	client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	if err := client.Ping(context.Background()).Err(); err != nil {
+		t.Skipf("Redis not available: %v", err)
+	}
+	limiter, err := goratelimit.NewLeakyBucket(capacity, leakRate, mode, goratelimit.WithRedis(client))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return limiter
+}
 
+func TestNewLeakyBucket_Redis(t *testing.T) {
 	t.Run("valid parameters - policing mode", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 10, 60, goratelimit.Policing)
-		if err != nil {
-			t.Skipf("Redis not available: %v", err)
-		}
+		limiter := newRedisLeakyBucket(t, 10, 60, goratelimit.Policing)
 		if limiter == nil {
 			t.Error("expected limiter to be non-nil")
 		}
 	})
 
 	t.Run("valid parameters - shaping mode", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 10, 60, goratelimit.Shaping)
-		if err != nil {
-			t.Skipf("Redis not available: %v", err)
-		}
+		limiter := newRedisLeakyBucket(t, 10, 60, goratelimit.Shaping)
 		if limiter == nil {
 			t.Error("expected limiter to be non-nil")
 		}
 	})
 
 	t.Run("invalid parameters - zero capacity", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 0, 60, goratelimit.Policing)
+		client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+		limiter, err := goratelimit.NewLeakyBucket(0, 60, goratelimit.Policing, goratelimit.WithRedis(client))
 		if err == nil {
 			t.Error("expected error for zero capacity")
 		}
@@ -474,7 +500,8 @@ func TestNewLeakyBucketRedisRateLimiter(t *testing.T) {
 	})
 
 	t.Run("invalid parameters - zero leak rate", func(t *testing.T) {
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 10, 0, goratelimit.Policing)
+		client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+		limiter, err := goratelimit.NewLeakyBucket(10, 0, goratelimit.Policing, goratelimit.WithRedis(client))
 		if err == nil {
 			t.Error("expected error for zero leak rate")
 		}
@@ -484,298 +511,246 @@ func TestNewLeakyBucketRedisRateLimiter(t *testing.T) {
 	})
 }
 
-func TestLeakyBucketRedisRateLimiter_Allow_Policing(t *testing.T) {
+func TestLeakyBucket_Redis_Allow_Policing(t *testing.T) {
 	ctx := context.Background()
-	limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 10, 60, goratelimit.Policing)
-	if err != nil {
-		t.Skipf("Redis not available: %v", err)
-	}
 
 	t.Run("allows requests within limit", func(t *testing.T) {
+		limiter := newRedisLeakyBucket(t, 10, 60, goratelimit.Policing)
 		userID := fmt.Sprintf("test-leaky-policing-user-1-%d", time.Now().UnixNano())
-		allowed, remaining, limit, retryAfter, delay := limiter.Allow(ctx, userID)
-		if !allowed {
+
+		result, err := limiter.Allow(ctx, userID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.Allowed {
 			t.Error("first request should be allowed")
 		}
-		if remaining < 0 || remaining > limit {
-			t.Errorf("remaining should be between 0 and %d, got %d", limit, remaining)
+		if result.Remaining < 0 || result.Remaining > result.Limit {
+			t.Errorf("remaining should be between 0 and %d, got %d", result.Limit, result.Remaining)
 		}
-		if retryAfter != 0 {
-			t.Errorf("retryAfter should be 0 when allowed, got %d", retryAfter)
-		}
-		if delay != 0 {
-			t.Errorf("delay should be 0 when allowed, got %f", delay)
+		if result.RetryAfter != 0 {
+			t.Errorf("retryAfter should be 0 when allowed, got %v", result.RetryAfter)
 		}
 	})
 
 	t.Run("rejects requests exceeding limit", func(t *testing.T) {
+		limiter := newRedisLeakyBucket(t, 3, 60, goratelimit.Policing)
 		userID := fmt.Sprintf("test-leaky-policing-user-2-%d", time.Now().UnixNano())
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 3, 60, goratelimit.Policing)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
 
-		// Make 3 requests
 		for i := 0; i < 3; i++ {
-			allowed, _, _, _, _ := limiter.Allow(ctx, userID)
-			if !allowed {
+			result, err := limiter.Allow(ctx, userID)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !result.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
 		}
 
-		// 4th request should be rejected
-		allowed, remaining, _, retryAfter, delay := limiter.Allow(ctx, userID)
-		if allowed {
+		result, err := limiter.Allow(ctx, userID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Allowed {
 			t.Error("4th request should be rejected")
 		}
-		if remaining != 0 {
-			t.Errorf("remaining should be 0, got %d", remaining)
+		if result.Remaining != 0 {
+			t.Errorf("remaining should be 0, got %d", result.Remaining)
 		}
-		if retryAfter <= 0 {
-			t.Errorf("retryAfter should be positive, got %d", retryAfter)
-		}
-		if delay != 0 {
-			t.Errorf("delay should be 0 for policing mode when rejected, got %f", delay)
+		if result.RetryAfter <= 0 {
+			t.Errorf("retryAfter should be positive, got %v", result.RetryAfter)
 		}
 	})
 
 	t.Run("refills tokens over time", func(t *testing.T) {
+		limiter := newRedisLeakyBucket(t, 2, 2, goratelimit.Policing)
 		userID := fmt.Sprintf("test-leaky-policing-user-3-%d", time.Now().UnixNano())
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 2, 2, goratelimit.Policing) // 2 capacity, 2 per second leak rate
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
 
-		// Use up all tokens
 		limiter.Allow(ctx, userID)
 		limiter.Allow(ctx, userID)
 
-		// Should be rejected
-		allowed, _, _, _, _ := limiter.Allow(ctx, userID)
-		if allowed {
+		result, _ := limiter.Allow(ctx, userID)
+		if result.Allowed {
 			t.Error("third request should be rejected")
 		}
 
-		// Wait for tokens to leak
 		time.Sleep(1100 * time.Millisecond)
 
-		// Should allow requests again after leak
-		allowed, _, _, _, _ = limiter.Allow(ctx, userID)
-		if !allowed {
+		if result, _ := limiter.Allow(ctx, userID); !result.Allowed {
 			t.Error("request after leak should be allowed")
 		}
-		allowed, _, _, _, _ = limiter.Allow(ctx, userID)
-		if !allowed {
+		if result, _ := limiter.Allow(ctx, userID); !result.Allowed {
 			t.Error("second request after leak should be allowed")
 		}
-		allowed, _, _, _, _ = limiter.Allow(ctx, userID)
-		if allowed {
+		if result, _ := limiter.Allow(ctx, userID); result.Allowed {
 			t.Error("third request after leak should be rejected")
 		}
 	})
 
 	t.Run("tracks separate limits per user", func(t *testing.T) {
+		limiter := newRedisLeakyBucket(t, 2, 60, goratelimit.Policing)
 		user1 := fmt.Sprintf("test-leaky-policing-user-4-%d", time.Now().UnixNano())
 		user2 := fmt.Sprintf("test-leaky-policing-user-5-%d", time.Now().UnixNano())
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 2, 60, goratelimit.Policing)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
 
-		// Use up limit for user1
-		allowed, _, _, _, _ := limiter.Allow(ctx, user1)
-		if !allowed {
+		if result, _ := limiter.Allow(ctx, user1); !result.Allowed {
 			t.Error("user1 first request should be allowed")
 		}
-		allowed, _, _, _, _ = limiter.Allow(ctx, user1)
-		if !allowed {
+		if result, _ := limiter.Allow(ctx, user1); !result.Allowed {
 			t.Error("user1 second request should be allowed")
 		}
 
-		// user1 should be rate limited
-		allowed1, _, _, _, _ := limiter.Allow(ctx, user1)
-		if allowed1 {
+		if result, _ := limiter.Allow(ctx, user1); result.Allowed {
 			t.Error("user1 should be rate limited")
 		}
 
-		// user2 should still have full limit
-		allowed2, _, _, _, _ := limiter.Allow(ctx, user2)
-		if !allowed2 {
+		if result, _ := limiter.Allow(ctx, user2); !result.Allowed {
 			t.Error("user2 should not be rate limited")
 		}
 	})
 
 	t.Run("tokens never exceed capacity", func(t *testing.T) {
+		limiter := newRedisLeakyBucket(t, 5, 100, goratelimit.Policing)
 		userID := fmt.Sprintf("test-leaky-policing-user-6-%d", time.Now().UnixNano())
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 5, 100, goratelimit.Policing) // High leak rate
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
 
-		// Use up all tokens
 		for i := 0; i < 5; i++ {
 			limiter.Allow(ctx, userID)
 		}
 
-		// Wait long enough that leak would exceed capacity
 		time.Sleep(200 * time.Millisecond)
 
-		// Should only allow up to capacity
 		allowedCount := 0
 		for i := 0; i < 10; i++ {
-			allowed, _, _, _, _ := limiter.Allow(ctx, userID)
-			if allowed {
+			result, _ := limiter.Allow(ctx, userID)
+			if result.Allowed {
 				allowedCount++
 			}
 		}
 
-		// Should allow exactly capacity (5) tokens
 		if allowedCount != 5 {
 			t.Errorf("expected exactly 5 allowed requests (capacity), got %d", allowedCount)
 		}
 	})
 }
 
-func TestLeakyBucketRedisRateLimiter_Allow_Shaping(t *testing.T) {
+func TestLeakyBucket_Redis_Allow_Shaping(t *testing.T) {
 	ctx := context.Background()
-	limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 10, 60, goratelimit.Shaping)
-	if err != nil {
-		t.Skipf("Redis not available: %v", err)
-	}
 
 	t.Run("allows requests within limit with delay", func(t *testing.T) {
+		limiter := newRedisLeakyBucket(t, 10, 60, goratelimit.Shaping)
 		userID := fmt.Sprintf("test-leaky-shaping-user-1-%d", time.Now().UnixNano())
-		allowed, remaining, limit, retryAfter, delay := limiter.Allow(ctx, userID)
-		if !allowed {
+
+		result, err := limiter.Allow(ctx, userID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.Allowed {
 			t.Error("first request should be allowed")
 		}
-		if remaining < 0 || remaining > limit {
-			t.Errorf("remaining should be between 0 and %d, got %d", limit, remaining)
+		if result.Remaining < 0 || result.Remaining > result.Limit {
+			t.Errorf("remaining should be between 0 and %d, got %d", result.Limit, result.Remaining)
 		}
-		if retryAfter != 0 {
-			t.Errorf("retryAfter should be 0 when allowed, got %d", retryAfter)
-		}
-		// First request may have no delay or minimal delay
-		if delay < 0 {
-			t.Errorf("delay should be non-negative, got %f", delay)
+		if result.RetryAfter < 0 {
+			t.Errorf("retryAfter should be non-negative when allowed, got %v", result.RetryAfter)
 		}
 	})
 
 	t.Run("rejects requests when queue is full", func(t *testing.T) {
+		limiter := newRedisLeakyBucket(t, 3, 60, goratelimit.Shaping)
 		userID := fmt.Sprintf("test-leaky-shaping-user-2-%d", time.Now().UnixNano())
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 3, 60, goratelimit.Shaping)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
 
-		// Fill up the queue
 		for i := 0; i < 3; i++ {
-			allowed, _, _, _, _ := limiter.Allow(ctx, userID)
-			if !allowed {
+			result, err := limiter.Allow(ctx, userID)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !result.Allowed {
 				t.Errorf("request %d should be allowed", i+1)
 			}
 		}
 
-		// 4th request should be rejected
-		allowed, remaining, _, retryAfter, delay := limiter.Allow(ctx, userID)
-		if allowed {
+		result, err := limiter.Allow(ctx, userID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Allowed {
 			t.Error("4th request should be rejected")
 		}
-		if remaining != 0 {
-			t.Errorf("remaining should be 0, got %d", remaining)
+		if result.Remaining != 0 {
+			t.Errorf("remaining should be 0, got %d", result.Remaining)
 		}
-		if retryAfter != 0 {
-			t.Errorf("retryAfter should be 0 for shaping mode when rejected, got %d", retryAfter)
-		}
-		if delay != 0 {
-			t.Errorf("delay should be 0 when rejected, got %f", delay)
+		if result.RetryAfter != 0 {
+			t.Errorf("retryAfter should be 0 for shaping mode when rejected, got %v", result.RetryAfter)
 		}
 	})
 
 	t.Run("delays requests based on queue depth", func(t *testing.T) {
+		limiter := newRedisLeakyBucket(t, 5, 5, goratelimit.Shaping)
 		userID := fmt.Sprintf("test-leaky-shaping-user-3-%d", time.Now().UnixNano())
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 5, 5, goratelimit.Shaping) // 5 capacity, 5 per second leak rate
+
+		result1, err := limiter.Allow(ctx, userID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-
-		// First request: should have minimal or no delay
-		_, _, _, _, delay1 := limiter.Allow(ctx, userID)
-		if delay1 < 0 {
-			t.Errorf("delay should be non-negative, got %f", delay1)
+		if result1.RetryAfter < 0 {
+			t.Errorf("delay should be non-negative, got %v", result1.RetryAfter)
 		}
 
-		// Second request: should have delay
-		_, _, _, _, delay2 := limiter.Allow(ctx, userID)
-		if delay2 <= delay1 {
-			t.Errorf("delay should increase, got %f (previous: %f)", delay2, delay1)
+		result2, err := limiter.Allow(ctx, userID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result2.RetryAfter <= result1.RetryAfter {
+			t.Errorf("delay should increase, got %v (previous: %v)", result2.RetryAfter, result1.RetryAfter)
 		}
 	})
 
 	t.Run("queue drains over time", func(t *testing.T) {
+		limiter := newRedisLeakyBucket(t, 2, 2, goratelimit.Shaping)
 		userID := fmt.Sprintf("test-leaky-shaping-user-4-%d", time.Now().UnixNano())
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 2, 2, goratelimit.Shaping) // 2 capacity, 2 per second leak rate
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
 
-		// Fill up the queue
 		limiter.Allow(ctx, userID)
 		limiter.Allow(ctx, userID)
 
-		// Should be rejected
-		allowed, _, _, _, _ := limiter.Allow(ctx, userID)
-		if allowed {
+		if result, _ := limiter.Allow(ctx, userID); result.Allowed {
 			t.Error("third request should be rejected")
 		}
 
-		// Wait for queue to drain
 		time.Sleep(1100 * time.Millisecond)
 
-		// Should allow requests again after drain
-		allowed, _, _, _, delay := limiter.Allow(ctx, userID)
-		if !allowed {
+		result, err := limiter.Allow(ctx, userID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.Allowed {
 			t.Error("request after drain should be allowed")
 		}
-		if delay < 0 {
-			t.Errorf("delay should be non-negative, got %f", delay)
+		if result.RetryAfter < 0 {
+			t.Errorf("delay should be non-negative, got %v", result.RetryAfter)
 		}
 	})
 
 	t.Run("tracks separate limits per user", func(t *testing.T) {
+		limiter := newRedisLeakyBucket(t, 2, 60, goratelimit.Shaping)
 		user1 := fmt.Sprintf("test-leaky-shaping-user-5-%d", time.Now().UnixNano())
 		user2 := fmt.Sprintf("test-leaky-shaping-user-6-%d", time.Now().UnixNano())
-		limiter, err := goratelimit.NewLeakyBucketRedisRateLimiter(ctx, 2, 60, goratelimit.Shaping)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
 
-		// Use up limit for user1
-		allowed, _, _, _, _ := limiter.Allow(ctx, user1)
-		if !allowed {
+		if result, _ := limiter.Allow(ctx, user1); !result.Allowed {
 			t.Error("user1 first request should be allowed")
 		}
-		allowed, _, _, _, _ = limiter.Allow(ctx, user1)
-		if !allowed {
+		if result, _ := limiter.Allow(ctx, user1); !result.Allowed {
 			t.Error("user1 second request should be allowed")
 		}
 
-		// user1 should be rate limited
-		allowed1, _, _, _, _ := limiter.Allow(ctx, user1)
-		if allowed1 {
+		if result, _ := limiter.Allow(ctx, user1); result.Allowed {
 			t.Error("user1 should be rate limited")
 		}
 
-		// user2 should still have full limit
-		allowed2, _, _, _, _ := limiter.Allow(ctx, user2)
-		if !allowed2 {
+		if result, _ := limiter.Allow(ctx, user2); !result.Allowed {
 			t.Error("user2 should not be rate limited")
 		}
 	})
 
 	t.Run("fail open on Redis error", func(t *testing.T) {
-		// The code shows fail-open behavior (returns true on error)
-		// This is hard to test without mocking Redis connection
 		t.Skip("requires Redis mocking to test fail-open behavior")
 	})
 }
