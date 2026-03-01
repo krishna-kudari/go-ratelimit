@@ -128,7 +128,7 @@ func (s *slidingWindowRedis) Allow(ctx context.Context, key string) (*Result, er
 }
 
 func (s *slidingWindowRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
-	fullKey := fmt.Sprintf("%s:%s", s.opts.KeyPrefix, key)
+	fullKey := s.opts.FormatKey(key)
 	now := time.Now().UnixMilli()
 	windowStart := now - s.windowSeconds*1000
 
@@ -183,7 +183,7 @@ func (s *slidingWindowRedis) AllowN(ctx context.Context, key string, n int) (*Re
 }
 
 func (s *slidingWindowRedis) Reset(ctx context.Context, key string) error {
-	fullKey := fmt.Sprintf("%s:%s", s.opts.KeyPrefix, key)
+	fullKey := s.opts.FormatKey(key)
 	return s.redis.Del(ctx, fullKey).Err()
 }
 

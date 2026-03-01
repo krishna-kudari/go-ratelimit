@@ -267,7 +267,7 @@ func (l *leakyBucketRedis) Allow(ctx context.Context, key string) (*Result, erro
 }
 
 func (l *leakyBucketRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
-	fullKey := fmt.Sprintf("%s:%s", l.opts.KeyPrefix, key)
+	fullKey := l.opts.FormatKey(key)
 	now := float64(time.Now().UnixNano()) / 1e9
 
 	script := luaPolicing
@@ -310,6 +310,6 @@ func (l *leakyBucketRedis) AllowN(ctx context.Context, key string, n int) (*Resu
 }
 
 func (l *leakyBucketRedis) Reset(ctx context.Context, key string) error {
-	fullKey := fmt.Sprintf("%s:%s", l.opts.KeyPrefix, key)
+	fullKey := l.opts.FormatKey(key)
 	return l.redis.Del(ctx, fullKey).Err()
 }

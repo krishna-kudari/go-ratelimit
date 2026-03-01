@@ -131,9 +131,8 @@ func (s *slidingWindowCounterRedis) AllowN(ctx context.Context, key string, n in
 	previousWindow := currentWindow - 1
 	elapsed := float64(now%s.windowSeconds) / float64(s.windowSeconds)
 
-	prefix := s.opts.KeyPrefix
-	currentKey := fmt.Sprintf("%s:%s:%d", prefix, key, currentWindow)
-	previousKey := fmt.Sprintf("%s:%s:%d", prefix, key, previousWindow)
+	currentKey := s.opts.FormatKeySuffix(key, fmt.Sprintf("%d", currentWindow))
+	previousKey := s.opts.FormatKeySuffix(key, fmt.Sprintf("%d", previousWindow))
 
 	prevStr, err := s.redis.Get(ctx, previousKey).Result()
 	if err != nil && err != redis.Nil {
@@ -189,9 +188,8 @@ func (s *slidingWindowCounterRedis) Reset(ctx context.Context, key string) error
 	now := time.Now().Unix()
 	currentWindow := now / s.windowSeconds
 	previousWindow := currentWindow - 1
-	prefix := s.opts.KeyPrefix
-	currentKey := fmt.Sprintf("%s:%s:%d", prefix, key, currentWindow)
-	previousKey := fmt.Sprintf("%s:%s:%d", prefix, key, previousWindow)
+	currentKey := s.opts.FormatKeySuffix(key, fmt.Sprintf("%d", currentWindow))
+	previousKey := s.opts.FormatKeySuffix(key, fmt.Sprintf("%d", previousWindow))
 	return s.redis.Del(ctx, currentKey, previousKey).Err()
 }
 

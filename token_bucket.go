@@ -157,7 +157,7 @@ func (t *tokenBucketRedis) Allow(ctx context.Context, key string) (*Result, erro
 }
 
 func (t *tokenBucketRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
-	fullKey := fmt.Sprintf("%s:%s", t.opts.KeyPrefix, key)
+	fullKey := t.opts.FormatKey(key)
 	now := float64(time.Now().UnixNano()) / 1e9
 
 	result, err := tokenBucketScript.Run(ctx, t.redis, []string{fullKey},
@@ -186,6 +186,6 @@ func (t *tokenBucketRedis) AllowN(ctx context.Context, key string, n int) (*Resu
 }
 
 func (t *tokenBucketRedis) Reset(ctx context.Context, key string) error {
-	fullKey := fmt.Sprintf("%s:%s", t.opts.KeyPrefix, key)
+	fullKey := t.opts.FormatKey(key)
 	return t.redis.Del(ctx, fullKey).Err()
 }

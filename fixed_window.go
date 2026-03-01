@@ -149,7 +149,7 @@ func (f *fixedWindowRedis) Allow(ctx context.Context, key string) (*Result, erro
 }
 
 func (f *fixedWindowRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
-	fullKey := fmt.Sprintf("%s:%s", f.opts.KeyPrefix, key)
+	fullKey := f.opts.FormatKey(key)
 
 	result, err := fixedWindowScript.Run(ctx, f.redis, []string{fullKey},
 		f.maxRequests,
@@ -183,6 +183,6 @@ func (f *fixedWindowRedis) AllowN(ctx context.Context, key string, n int) (*Resu
 }
 
 func (f *fixedWindowRedis) Reset(ctx context.Context, key string) error {
-	fullKey := fmt.Sprintf("%s:%s", f.opts.KeyPrefix, key)
+	fullKey := f.opts.FormatKey(key)
 	return f.redis.Del(ctx, fullKey).Err()
 }

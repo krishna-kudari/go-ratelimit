@@ -51,6 +51,13 @@ type Options struct {
 	// If true (default), requests are allowed on errors.
 	// If false, requests are denied on errors.
 	FailOpen bool
+
+	// HashTag enables Redis Cluster hash-tag wrapping of user keys.
+	// When true, keys are formatted as "prefix:{key}" instead of "prefix:key",
+	// ensuring all keys for the same logical entity route to the same slot.
+	// This is required for Sliding Window Counter (multi-key) and recommended
+	// for any Redis Cluster deployment.
+	HashTag bool
 }
 
 // Option is a functional option for configuring a Limiter.
@@ -83,6 +90,14 @@ func WithFailOpen(failOpen bool) Option {
 	return func(o *Options) { o.FailOpen = failOpen }
 }
 
+// WithHashTag enables Redis Cluster hash-tag wrapping.
+// Keys become "prefix:{key}" so all keys for a given user route
+// to the same Redis Cluster slot. Required for multi-key algorithms
+// (Sliding Window Counter) in Cluster mode.
+func WithHashTag() Option {
+	return func(o *Options) { o.HashTag = true }
+}
+
 func defaultOptions() *Options {
 	return &Options{
 		KeyPrefix: "ratelimit",
@@ -96,6 +111,25 @@ func applyOptions(opts []Option) *Options {
 		opt(o)
 	}
 	return o
+}
+
+// FormatKey builds a storage key. With HashTag enabled the user key is
+// wrapped in {}: "prefix:{key}" so all derived keys for the same user
+// land on the same Redis Cluster slot.
+func (o *Options) FormatKey(key string) string {
+	if o.HashTag {
+		return o.KeyPrefix + ":{" + key + "}"
+	}
+	return o.KeyPrefix + ":" + key
+}
+
+// FormatKeySuffix builds a storage key with an additional suffix.
+// "prefix:{key}:suffix" (hash-tag) or "prefix:key:suffix" (plain).
+func (o *Options) FormatKeySuffix(key, suffix string) string {
+	if o.HashTag {
+		return o.KeyPrefix + ":{" + key + "}:" + suffix
+	}
+	return o.KeyPrefix + ":" + key + ":" + suffix
 }
 
 // redisClient returns the effective redis.UniversalClient from Options,

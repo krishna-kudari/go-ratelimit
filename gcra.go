@@ -139,7 +139,7 @@ func (g *gcraRedis) Allow(ctx context.Context, key string) (*Result, error) {
 }
 
 func (g *gcraRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
-	fullKey := fmt.Sprintf("%s:%s", g.opts.KeyPrefix, key)
+	fullKey := g.opts.FormatKey(key)
 	now := float64(time.Now().UnixNano()) / 1e9
 	increment := g.emissionInterval * float64(n)
 
@@ -169,6 +169,6 @@ func (g *gcraRedis) AllowN(ctx context.Context, key string, n int) (*Result, err
 }
 
 func (g *gcraRedis) Reset(ctx context.Context, key string) error {
-	fullKey := fmt.Sprintf("%s:%s", g.opts.KeyPrefix, key)
+	fullKey := g.opts.FormatKey(key)
 	return g.redis.Del(ctx, fullKey).Err()
 }
