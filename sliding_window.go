@@ -22,9 +22,10 @@ func (r *slidingWindowRateLimiter) Allow() bool {
 	defer r.mu.Unlock()
 
 	now := time.Now()
-	for len(r.timestamps) > 0 && now.Sub(r.timestamps[0])*time.Second > time.Duration(r.window_seconds)*time.Second {
+	windowDuration := time.Duration(r.window_seconds) * time.Second
+	for len(r.timestamps) > 0 && now.Sub(r.timestamps[0]) > windowDuration {
 		r.timestamps = r.timestamps[1:]
- 	}
+	}
 
 	if len(r.timestamps) < int(r.max_requests) {
 		r.timestamps = append(r.timestamps, time.Now())
@@ -66,7 +67,7 @@ type SlidingWindowRedisRateLimiter struct {
 	WindowSeconds int64
 }
 
-func NewSlidingWindowRedisRateLimiter(ctx context.Context, max_requests int64, window_seconds int64) (*RedisRateLimiter, error) {
+func NewSlidingWindowRedisRateLimiter(ctx context.Context, max_requests int64, window_seconds int64) (*SlidingWindowRedisRateLimiter, error) {
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",
@@ -76,7 +77,7 @@ func NewSlidingWindowRedisRateLimiter(ctx context.Context, max_requests int64, w
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("redis connection failed: %w", err)
 	}
-	return &RedisRateLimiter{
+	return &SlidingWindowRedisRateLimiter{
 		redis:         redisClient,
 		MaxRequests:   max_requests,
 		WindowSeconds: window_seconds,
@@ -120,9 +121,14 @@ func (r *SlidingWindowRedisRateLimiter) Allow(ctx context.Context, userID string
 	retryAfter = windowSeconds
 	if err == nil && len(oldest) > 0 {
 		oldestScore := int64(oldest[0].Score)
-		retryAfter = (oldestScore+windowSeconds*1000-now)/1000 + 1
+		// Calculate when the oldest entry will expire (oldestScore + windowSeconds)
+		expiresAt := oldestScore + windowSeconds*1000
+		retryAfter = (expiresAt - now) / 1000
 		if retryAfter < 1 {
 			retryAfter = 1
+		}
+		if retryAfter > windowSeconds {
+			retryAfter = windowSeconds
 		}
 	}
 	return false, 0, maxRequests, retryAfter
