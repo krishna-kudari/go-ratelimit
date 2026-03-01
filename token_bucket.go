@@ -146,7 +146,7 @@ return { allowed, remaining, retry_after }
 `)
 
 type tokenBucketRedis struct {
-	redis      *redis.Client
+	redis      redis.UniversalClient
 	capacity   int64
 	refillRate int64
 	opts       *Options

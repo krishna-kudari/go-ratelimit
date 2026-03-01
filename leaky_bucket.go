@@ -255,7 +255,7 @@ return { allowed, remaining, delay_ms }
 `)
 
 type leakyBucketRedis struct {
-	redis    *redis.Client
+	redis    redis.UniversalClient
 	capacity int64
 	leakRate int64
 	mode     LeakyBucketMode

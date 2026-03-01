@@ -127,7 +127,7 @@ end
 `)
 
 type gcraRedis struct {
-	redis            *redis.Client
+	redis            redis.UniversalClient
 	emissionInterval float64
 	burstAllowance   float64
 	burst            int64

@@ -138,7 +138,7 @@ return { 0, 0, ttl }
 `)
 
 type fixedWindowRedis struct {
-	redis         *redis.Client
+	redis         redis.UniversalClient
 	maxRequests   int64
 	windowSeconds int64
 	opts          *Options

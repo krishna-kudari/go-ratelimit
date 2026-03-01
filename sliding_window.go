@@ -117,7 +117,7 @@ func (s *slidingWindowMemory) Reset(ctx context.Context, key string) error {
 // ─── Redis ────────────────────────────────────────────────────────────────────
 
 type slidingWindowRedis struct {
-	redis         *redis.Client
+	redis         redis.UniversalClient
 	maxRequests   int64
 	windowSeconds int64
 	opts          *Options

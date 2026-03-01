@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/krishna-kudari/ratelimit/store"
 )
 
 // Limiter is the core interface for all rate limiting algorithms.
@@ -32,30 +34,51 @@ type Result struct {
 
 // Options configures behavior shared across all algorithm implementations.
 type Options struct {
-	RedisClient *redis.Client
-	KeyPrefix   string
-	FailOpen    bool
+	// Store is the pluggable backend for rate limit state.
+	// Takes precedence over RedisClient if both are set.
+	Store store.Store
+
+	// RedisClient is a Redis connection for distributed rate limiting.
+	// Accepts *redis.Client, *redis.ClusterClient, *redis.Ring, or any
+	// redis.UniversalClient implementation.
+	RedisClient redis.UniversalClient
+
+	// KeyPrefix is prepended to all storage keys.
+	// Default: "ratelimit".
+	KeyPrefix string
+
+	// FailOpen controls behavior when the backend is unreachable.
+	// If true (default), requests are allowed on errors.
+	// If false, requests are denied on errors.
+	FailOpen bool
 }
 
 // Option is a functional option for configuring a Limiter.
 type Option func(*Options)
 
+// WithStore configures the limiter to use a custom store.Store backend.
+// This takes precedence over WithRedis if both are set.
+func WithStore(s store.Store) Option {
+	return func(o *Options) { o.Store = s }
+}
+
 // WithRedis configures the limiter to use Redis as its backing store.
-// When set, the limiter operates in distributed mode. When nil (default),
-// it uses an in-memory store.
-func WithRedis(client *redis.Client) Option {
+// Accepts any redis.UniversalClient: *redis.Client (standalone),
+// *redis.ClusterClient (cluster), *redis.Ring (ring), or sentinel.
+// When set, the limiter operates in distributed mode.
+func WithRedis(client redis.UniversalClient) Option {
 	return func(o *Options) { o.RedisClient = client }
 }
 
-// WithKeyPrefix sets the prefix prepended to all Redis keys.
+// WithKeyPrefix sets the prefix prepended to all storage keys.
 // Default: "ratelimit".
 func WithKeyPrefix(prefix string) Option {
 	return func(o *Options) { o.KeyPrefix = prefix }
 }
 
-// WithFailOpen controls behavior when Redis is unreachable.
-// If true (default), requests are allowed on Redis errors.
-// If false, requests are denied on Redis errors.
+// WithFailOpen controls behavior when the backend is unreachable.
+// If true (default), requests are allowed on errors.
+// If false, requests are denied on errors.
 func WithFailOpen(failOpen bool) Option {
 	return func(o *Options) { o.FailOpen = failOpen }
 }
@@ -73,4 +96,15 @@ func applyOptions(opts []Option) *Options {
 		opt(o)
 	}
 	return o
+}
+
+// redisClient returns the effective redis.UniversalClient from Options,
+// checking Store (if it's a RedisStore) then falling back to RedisClient.
+func (o *Options) redisClient() redis.UniversalClient {
+	return o.RedisClient
+}
+
+// isRedis returns true if a Redis backend is configured.
+func (o *Options) isRedis() bool {
+	return o.RedisClient != nil
 }
