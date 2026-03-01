@@ -6,7 +6,7 @@ If you discover a security vulnerability, please report it responsibly.
 
 **Do not open a public issue.**
 
-Email: **krishna.kudari@outlook.com**
+Email: **me@krishna-kudari.link**
 
 Include:
 - Description of the vulnerability
