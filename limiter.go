@@ -58,6 +58,11 @@ type Options struct {
 	// This is required for Sliding Window Counter (multi-key) and recommended
 	// for any Redis Cluster deployment.
 	HashTag bool
+
+	// LimitFunc dynamically resolves the rate limit for each key.
+	// Returns the effective limit (maxRequests / capacity / burst) for the key.
+	// Returning <= 0 falls back to the construction-time default.
+	LimitFunc func(key string) int64
 }
 
 // Option is a functional option for configuring a Limiter.
@@ -98,6 +103,14 @@ func WithHashTag() Option {
 	return func(o *Options) { o.HashTag = true }
 }
 
+// WithLimitFunc sets a dynamic limit resolver. The function is called on
+// every Allow/AllowN with the request key and returns the effective limit
+// (maxRequests for window algorithms, capacity for buckets, burst for GCRA).
+// Returning <= 0 falls back to the construction-time default.
+func WithLimitFunc(fn func(key string) int64) Option {
+	return func(o *Options) { o.LimitFunc = fn }
+}
+
 func defaultOptions() *Options {
 	return &Options{
 		KeyPrefix: "ratelimit",
@@ -111,6 +124,17 @@ func applyOptions(opts []Option) *Options {
 		opt(o)
 	}
 	return o
+}
+
+// resolveLimit returns the dynamic limit for key, or defaultLimit when
+// LimitFunc is nil or returns <= 0.
+func (o *Options) resolveLimit(key string, defaultLimit int64) int64 {
+	if o.LimitFunc != nil {
+		if v := o.LimitFunc(key); v > 0 {
+			return v
+		}
+	}
+	return defaultLimit
 }
 
 // FormatKey builds a storage key. With HashTag enabled the user key is

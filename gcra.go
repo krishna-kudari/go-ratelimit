@@ -62,6 +62,9 @@ func (g *gcraMemory) AllowN(ctx context.Context, key string, n int) (*Result, er
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	burst := g.opts.resolveLimit(key, g.burst)
+	burstAllowance := float64(burst-1) * g.emissionInterval
+
 	state, ok := g.states[key]
 	if !ok {
 		state = &gcraState{}
@@ -74,21 +77,21 @@ func (g *gcraMemory) AllowN(ctx context.Context, key string, n int) (*Result, er
 	newTAT := tat + increment
 	diff := newTAT - now
 
-	if diff <= g.burstAllowance+g.emissionInterval {
+	if diff <= burstAllowance+g.emissionInterval {
 		state.tat = newTAT
-		remaining := int64(math.Floor((g.burstAllowance - diff + g.emissionInterval) / g.emissionInterval))
+		remaining := int64(math.Floor((burstAllowance - diff + g.emissionInterval) / g.emissionInterval))
 		return &Result{
 			Allowed:   true,
 			Remaining: remaining,
-			Limit:     g.burst,
+			Limit:     burst,
 		}, nil
 	}
 
-	retryAfter := time.Duration(math.Ceil(diff-g.burstAllowance) * float64(time.Second))
+	retryAfter := time.Duration(math.Ceil(diff-burstAllowance) * float64(time.Second))
 	return &Result{
 		Allowed:    false,
 		Remaining:  0,
-		Limit:      g.burst,
+		Limit:      burst,
 		RetryAfter: retryAfter,
 	}, nil
 }
@@ -140,20 +143,22 @@ func (g *gcraRedis) Allow(ctx context.Context, key string) (*Result, error) {
 
 func (g *gcraRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
 	fullKey := g.opts.FormatKey(key)
+	burst := g.opts.resolveLimit(key, g.burst)
+	burstAllowance := float64(burst-1) * g.emissionInterval
 	now := float64(time.Now().UnixNano()) / 1e9
 	increment := g.emissionInterval * float64(n)
 
 	result, err := gcraScript.Run(ctx, g.redis, []string{fullKey},
 		g.emissionInterval,
-		g.burstAllowance,
+		burstAllowance,
 		now,
 		increment,
 	).Int64Slice()
 	if err != nil {
 		if g.opts.FailOpen {
-			return &Result{Allowed: true, Remaining: g.burst - 1, Limit: g.burst}, nil
+			return &Result{Allowed: true, Remaining: burst - 1, Limit: burst}, nil
 		}
-		return &Result{Allowed: false, Remaining: 0, Limit: g.burst}, fmt.Errorf("goratelimit: redis error: %w", err)
+		return &Result{Allowed: false, Remaining: 0, Limit: burst}, fmt.Errorf("goratelimit: redis error: %w", err)
 	}
 
 	allowed := result[0] == 1
@@ -163,7 +168,7 @@ func (g *gcraRedis) AllowN(ctx context.Context, key string, n int) (*Result, err
 	return &Result{
 		Allowed:    allowed,
 		Remaining:  remaining,
-		Limit:      g.burst,
+		Limit:      burst,
 		RetryAfter: time.Duration(retryAfterSec) * time.Second,
 	}, nil
 }

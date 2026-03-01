@@ -147,6 +147,15 @@ func (b *Builder) FailOpen(v bool) *Builder {
 	return b
 }
 
+// LimitFunc sets a dynamic per-key limit resolver.
+// The function is called on every Allow/AllowN and overrides the
+// construction-time limit (maxRequests / capacity / burst).
+// Returning <= 0 falls back to the default.
+func (b *Builder) LimitFunc(fn func(key string) int64) *Builder {
+	b.opts = append(b.opts, WithLimitFunc(fn))
+	return b
+}
+
 // ─── Build ───────────────────────────────────────────────────────────────────
 
 // Build validates the configuration and returns the configured Limiter.

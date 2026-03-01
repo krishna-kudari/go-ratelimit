@@ -62,6 +62,8 @@ func (s *slidingWindowCounterMemory) AllowN(ctx context.Context, key string, n i
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	maxReq := s.opts.resolveLimit(key, s.maxRequests)
+
 	state, ok := s.states[key]
 	if !ok {
 		state = &slidingWindowCounterState{windowStart: time.Now()}
@@ -82,14 +84,14 @@ func (s *slidingWindowCounterMemory) AllowN(ctx context.Context, key string, n i
 	estimatedCount := prevWeight + float64(state.currentCount)
 
 	cost := float64(n)
-	if estimatedCount+cost <= float64(s.maxRequests) {
+	if estimatedCount+cost <= float64(maxReq) {
 		state.currentCount += int64(n)
 		newEstimate := prevWeight + float64(state.currentCount)
-		remaining := int64(math.Max(0, math.Floor(float64(s.maxRequests)-newEstimate)))
+		remaining := int64(math.Max(0, math.Floor(float64(maxReq)-newEstimate)))
 		return &Result{
 			Allowed:   true,
 			Remaining: remaining,
-			Limit:     s.maxRequests,
+			Limit:     maxReq,
 		}, nil
 	}
 
@@ -100,7 +102,7 @@ func (s *slidingWindowCounterMemory) AllowN(ctx context.Context, key string, n i
 	return &Result{
 		Allowed:    false,
 		Remaining:  0,
-		Limit:      s.maxRequests,
+		Limit:      maxReq,
 		RetryAfter: retryAfter,
 	}, nil
 }
@@ -126,6 +128,7 @@ func (s *slidingWindowCounterRedis) Allow(ctx context.Context, key string) (*Res
 }
 
 func (s *slidingWindowCounterRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
+	maxReq := s.opts.resolveLimit(key, s.maxRequests)
 	now := time.Now().Unix()
 	currentWindow := now / s.windowSeconds
 	previousWindow := currentWindow - 1
@@ -136,21 +139,21 @@ func (s *slidingWindowCounterRedis) AllowN(ctx context.Context, key string, n in
 
 	prevStr, err := s.redis.Get(ctx, previousKey).Result()
 	if err != nil && err != redis.Nil {
-		return s.failResult(err)
+		return s.failResult(err, maxReq)
 	}
 	prevCount, _ := strconv.ParseFloat(prevStr, 64)
 	weightedPrev := prevCount * (1 - elapsed)
 
 	currStr, err := s.redis.Get(ctx, currentKey).Result()
 	if err != nil && err != redis.Nil {
-		return s.failResult(err)
+		return s.failResult(err, maxReq)
 	}
 	currentCount, _ := strconv.ParseFloat(currStr, 64)
 
 	estimatedCount := weightedPrev + currentCount
 	cost := float64(n)
 
-	if estimatedCount+cost > float64(s.maxRequests) {
+	if estimatedCount+cost > float64(maxReq) {
 		retryAfter := int64(math.Ceil(float64(s.windowSeconds) * (1 - elapsed)))
 		if retryAfter < 1 {
 			retryAfter = 1
@@ -161,26 +164,26 @@ func (s *slidingWindowCounterRedis) AllowN(ctx context.Context, key string, n in
 		return &Result{
 			Allowed:    false,
 			Remaining:  0,
-			Limit:      s.maxRequests,
+			Limit:      maxReq,
 			RetryAfter: time.Duration(retryAfter) * time.Second,
 		}, nil
 	}
 
 	newCount, err := s.redis.IncrBy(ctx, currentKey, int64(n)).Result()
 	if err != nil {
-		return s.failResult(err)
+		return s.failResult(err, maxReq)
 	}
 	if newCount == int64(n) {
 		s.redis.Expire(ctx, currentKey, time.Duration(s.windowSeconds*2)*time.Second)
 	}
 
 	newEstimate := weightedPrev + float64(newCount)
-	remaining := int64(math.Max(0, math.Floor(float64(s.maxRequests)-newEstimate)))
+	remaining := int64(math.Max(0, math.Floor(float64(maxReq)-newEstimate)))
 
 	return &Result{
 		Allowed:   true,
 		Remaining: remaining,
-		Limit:     s.maxRequests,
+		Limit:     maxReq,
 	}, nil
 }
 
@@ -193,9 +196,9 @@ func (s *slidingWindowCounterRedis) Reset(ctx context.Context, key string) error
 	return s.redis.Del(ctx, currentKey, previousKey).Err()
 }
 
-func (s *slidingWindowCounterRedis) failResult(err error) (*Result, error) {
+func (s *slidingWindowCounterRedis) failResult(err error, limit int64) (*Result, error) {
 	if s.opts.FailOpen {
-		return &Result{Allowed: true, Remaining: s.maxRequests - 1, Limit: s.maxRequests}, nil
+		return &Result{Allowed: true, Remaining: limit - 1, Limit: limit}, nil
 	}
-	return &Result{Allowed: false, Remaining: 0, Limit: s.maxRequests}, fmt.Errorf("goratelimit: redis error: %w", err)
+	return &Result{Allowed: false, Remaining: 0, Limit: limit}, fmt.Errorf("goratelimit: redis error: %w", err)
 }

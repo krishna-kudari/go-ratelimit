@@ -60,6 +60,8 @@ func (s *slidingWindowMemory) AllowN(ctx context.Context, key string, n int) (*R
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	maxReq := s.opts.resolveLimit(key, s.maxRequests)
+
 	state, ok := s.states[key]
 	if !ok {
 		state = &slidingWindowState{}
@@ -77,15 +79,15 @@ func (s *slidingWindowMemory) AllowN(ctx context.Context, key string, n int) (*R
 	state.timestamps = state.timestamps[cutoff:]
 
 	cost := int64(n)
-	if int64(len(state.timestamps))+cost <= s.maxRequests {
+	if int64(len(state.timestamps))+cost <= maxReq {
 		for i := 0; i < n; i++ {
 			state.timestamps = append(state.timestamps, now)
 		}
-		remaining := s.maxRequests - int64(len(state.timestamps))
+		remaining := maxReq - int64(len(state.timestamps))
 		return &Result{
 			Allowed:   true,
 			Remaining: remaining,
-			Limit:     s.maxRequests,
+			Limit:     maxReq,
 		}, nil
 	}
 
@@ -102,7 +104,7 @@ func (s *slidingWindowMemory) AllowN(ctx context.Context, key string, n int) (*R
 	return &Result{
 		Allowed:    false,
 		Remaining:  0,
-		Limit:      s.maxRequests,
+		Limit:      maxReq,
 		RetryAfter: retryAfter,
 	}, nil
 }
@@ -129,22 +131,23 @@ func (s *slidingWindowRedis) Allow(ctx context.Context, key string) (*Result, er
 
 func (s *slidingWindowRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
 	fullKey := s.opts.FormatKey(key)
+	maxReq := s.opts.resolveLimit(key, s.maxRequests)
 	now := time.Now().UnixMilli()
 	windowStart := now - s.windowSeconds*1000
 
 	// Remove expired entries
 	err := s.redis.ZRemRangeByScore(ctx, fullKey, "0", fmt.Sprintf("%d", windowStart)).Err()
 	if err != nil {
-		return s.failResult(err)
+		return s.failResult(err, maxReq)
 	}
 
 	count, err := s.redis.ZCard(ctx, fullKey).Result()
 	if err != nil {
-		return s.failResult(err)
+		return s.failResult(err, maxReq)
 	}
 
 	cost := int64(n)
-	if count+cost <= s.maxRequests {
+	if count+cost <= maxReq {
 		pipe := s.redis.Pipeline()
 		for i := 0; i < n; i++ {
 			member := fmt.Sprintf("%d:%d", now, rand.Int63())
@@ -152,13 +155,13 @@ func (s *slidingWindowRedis) AllowN(ctx context.Context, key string, n int) (*Re
 		}
 		pipe.Expire(ctx, fullKey, time.Duration(s.windowSeconds)*time.Second)
 		if _, err := pipe.Exec(ctx); err != nil {
-			return s.failResult(err)
+			return s.failResult(err, maxReq)
 		}
-		remaining := s.maxRequests - count - cost
+		remaining := maxReq - count - cost
 		return &Result{
 			Allowed:   true,
 			Remaining: remaining,
-			Limit:     s.maxRequests,
+			Limit:     maxReq,
 		}, nil
 	}
 
@@ -177,7 +180,7 @@ func (s *slidingWindowRedis) AllowN(ctx context.Context, key string, n int) (*Re
 	return &Result{
 		Allowed:    false,
 		Remaining:  0,
-		Limit:      s.maxRequests,
+		Limit:      maxReq,
 		RetryAfter: retryAfter,
 	}, nil
 }
@@ -187,9 +190,9 @@ func (s *slidingWindowRedis) Reset(ctx context.Context, key string) error {
 	return s.redis.Del(ctx, fullKey).Err()
 }
 
-func (s *slidingWindowRedis) failResult(err error) (*Result, error) {
+func (s *slidingWindowRedis) failResult(err error, limit int64) (*Result, error) {
 	if s.opts.FailOpen {
-		return &Result{Allowed: true, Remaining: s.maxRequests - 1, Limit: s.maxRequests}, nil
+		return &Result{Allowed: true, Remaining: limit - 1, Limit: limit}, nil
 	}
-	return &Result{Allowed: false, Remaining: 0, Limit: s.maxRequests}, fmt.Errorf("goratelimit: redis error: %w", err)
+	return &Result{Allowed: false, Remaining: 0, Limit: limit}, fmt.Errorf("goratelimit: redis error: %w", err)
 }

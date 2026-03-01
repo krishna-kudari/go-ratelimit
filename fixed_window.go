@@ -58,6 +58,8 @@ func (f *fixedWindowMemory) AllowN(ctx context.Context, key string, n int) (*Res
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	maxReq := f.opts.resolveLimit(key, f.maxRequests)
+
 	state, ok := f.states[key]
 	if !ok {
 		state = &fixedWindowState{windowStart: time.Now()}
@@ -72,14 +74,14 @@ func (f *fixedWindowMemory) AllowN(ctx context.Context, key string, n int) (*Res
 	}
 
 	cost := int64(n)
-	if state.requests+cost <= f.maxRequests {
+	if state.requests+cost <= maxReq {
 		state.requests += cost
-		remaining := f.maxRequests - state.requests
+		remaining := maxReq - state.requests
 		resetAt := state.windowStart.Add(windowDuration)
 		return &Result{
 			Allowed:   true,
 			Remaining: remaining,
-			Limit:     f.maxRequests,
+			Limit:     maxReq,
 			ResetAt:   resetAt,
 		}, nil
 	}
@@ -92,7 +94,7 @@ func (f *fixedWindowMemory) AllowN(ctx context.Context, key string, n int) (*Res
 	return &Result{
 		Allowed:    false,
 		Remaining:  0,
-		Limit:      f.maxRequests,
+		Limit:      maxReq,
 		ResetAt:    resetAt,
 		RetryAfter: retryAfter,
 	}, nil
@@ -150,17 +152,18 @@ func (f *fixedWindowRedis) Allow(ctx context.Context, key string) (*Result, erro
 
 func (f *fixedWindowRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
 	fullKey := f.opts.FormatKey(key)
+	maxReq := f.opts.resolveLimit(key, f.maxRequests)
 
 	result, err := fixedWindowScript.Run(ctx, f.redis, []string{fullKey},
-		f.maxRequests,
+		maxReq,
 		f.windowSeconds,
 		n,
 	).Int64Slice()
 	if err != nil {
 		if f.opts.FailOpen {
-			return &Result{Allowed: true, Remaining: f.maxRequests - 1, Limit: f.maxRequests}, nil
+			return &Result{Allowed: true, Remaining: maxReq - 1, Limit: maxReq}, nil
 		}
-		return &Result{Allowed: false, Remaining: 0, Limit: f.maxRequests}, fmt.Errorf("goratelimit: redis error: %w", err)
+		return &Result{Allowed: false, Remaining: 0, Limit: maxReq}, fmt.Errorf("goratelimit: redis error: %w", err)
 	}
 
 	allowed := result[0] == 1
@@ -176,7 +179,7 @@ func (f *fixedWindowRedis) AllowN(ctx context.Context, key string, n int) (*Resu
 	return &Result{
 		Allowed:    allowed,
 		Remaining:  remaining,
-		Limit:      f.maxRequests,
+		Limit:      maxReq,
 		ResetAt:    resetAt,
 		RetryAfter: retryAfter,
 	}, nil

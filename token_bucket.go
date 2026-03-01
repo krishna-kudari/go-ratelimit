@@ -59,10 +59,12 @@ func (t *tokenBucketMemory) AllowN(ctx context.Context, key string, n int) (*Res
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	cap := t.opts.resolveLimit(key, t.capacity)
+
 	state, ok := t.states[key]
 	if !ok {
 		state = &tokenBucketState{
-			tokens:     float64(t.capacity),
+			tokens:     float64(cap),
 			lastRefill: time.Now(),
 		}
 		t.states[key] = state
@@ -70,7 +72,7 @@ func (t *tokenBucketMemory) AllowN(ctx context.Context, key string, n int) (*Res
 
 	now := time.Now()
 	elapsed := now.Sub(state.lastRefill).Seconds()
-	state.tokens = math.Min(float64(t.capacity), state.tokens+elapsed*float64(t.refillRate))
+	state.tokens = math.Min(float64(cap), state.tokens+elapsed*float64(t.refillRate))
 	state.lastRefill = now
 
 	cost := float64(n)
@@ -80,7 +82,7 @@ func (t *tokenBucketMemory) AllowN(ctx context.Context, key string, n int) (*Res
 		return &Result{
 			Allowed:   true,
 			Remaining: remaining,
-			Limit:     t.capacity,
+			Limit:     cap,
 		}, nil
 	}
 
@@ -89,7 +91,7 @@ func (t *tokenBucketMemory) AllowN(ctx context.Context, key string, n int) (*Res
 	return &Result{
 		Allowed:    false,
 		Remaining:  0,
-		Limit:      t.capacity,
+		Limit:      cap,
 		RetryAfter: retryAfter,
 	}, nil
 }
@@ -158,19 +160,20 @@ func (t *tokenBucketRedis) Allow(ctx context.Context, key string) (*Result, erro
 
 func (t *tokenBucketRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
 	fullKey := t.opts.FormatKey(key)
+	cap := t.opts.resolveLimit(key, t.capacity)
 	now := float64(time.Now().UnixNano()) / 1e9
 
 	result, err := tokenBucketScript.Run(ctx, t.redis, []string{fullKey},
-		t.capacity,
+		cap,
 		t.refillRate,
 		now,
 		n,
 	).Int64Slice()
 	if err != nil {
 		if t.opts.FailOpen {
-			return &Result{Allowed: true, Remaining: t.capacity - 1, Limit: t.capacity}, nil
+			return &Result{Allowed: true, Remaining: cap - 1, Limit: cap}, nil
 		}
-		return &Result{Allowed: false, Remaining: 0, Limit: t.capacity}, fmt.Errorf("goratelimit: redis error: %w", err)
+		return &Result{Allowed: false, Remaining: 0, Limit: cap}, fmt.Errorf("goratelimit: redis error: %w", err)
 	}
 
 	allowed := result[0] == 1
@@ -180,7 +183,7 @@ func (t *tokenBucketRedis) AllowN(ctx context.Context, key string, n int) (*Resu
 	return &Result{
 		Allowed:    allowed,
 		Remaining:  remaining,
-		Limit:      t.capacity,
+		Limit:      cap,
 		RetryAfter: time.Duration(retryAfterSec) * time.Second,
 	}, nil
 }
