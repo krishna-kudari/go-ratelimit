@@ -1,5 +1,10 @@
 # go-ratelimit
 
+[![CI](https://github.com/krishna-kudari/ratelimit/actions/workflows/ci.yml/badge.svg)](https://github.com/krishna-kudari/ratelimit/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/krishna-kudari/ratelimit.svg)](https://pkg.go.dev/github.com/krishna-kudari/ratelimit)
+[![Go Report Card](https://goreportcard.com/badge/github.com/krishna-kudari/ratelimit)](https://goreportcard.com/report/github.com/krishna-kudari/ratelimit)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Production-grade rate limiting for [Go](https://go.dev/). One import, six algorithms, any backend.
 
 - In-memory or [Redis](https://redis.io/) (standalone, Cluster, Ring, Sentinel)

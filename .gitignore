@@ -1,0 +1,43 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Coverage
+*.coverprofile
+coverage.txt
+coverage.html
+*.prof
+
+# Vendor (use modules)
+vendor/
+
+# IDE
+.vscode/
+.cursor/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Temporary
+tmp/
+*.tmp
+*.log
+
+# Redis
+dump.rdb
+appendonly.aof
