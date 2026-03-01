@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
 	goratelimit "github.com/krishna-kudari/ratelimit"
 	"github.com/krishna-kudari/ratelimit/middleware/ginmw"
 )

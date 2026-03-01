@@ -4,9 +4,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/labstack/echo/v4"
+
 	goratelimit "github.com/krishna-kudari/ratelimit"
 	"github.com/krishna-kudari/ratelimit/middleware/echomw"
-	"github.com/labstack/echo/v4"
 )
 
 func newEcho(mw echo.MiddlewareFunc) *echo.Echo {

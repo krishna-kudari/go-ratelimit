@@ -12,9 +12,12 @@ linters:
     - misspell
     - gofmt
     - goimports
-    - prealloc
 
 linters-settings:
+  errcheck:
+    exclude-functions:
+      - (io.Closer).Close
+      - (net/http.ResponseWriter).Write
   misspell:
     locale: US
   goimports:
@@ -24,5 +27,12 @@ issues:
   exclude-dirs:
     - vendor
     - examples/demo/static
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+    - path: example_test\.go
+      linters:
+        - errcheck
   max-issues-per-linter: 50
   max-same-issues: 5

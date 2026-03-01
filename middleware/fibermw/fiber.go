@@ -15,6 +15,7 @@ import (
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
+
 	goratelimit "github.com/krishna-kudari/ratelimit"
 )
 

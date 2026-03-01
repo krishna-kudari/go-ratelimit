@@ -6,13 +6,14 @@ import (
 	"testing"
 	"time"
 
-	goratelimit "github.com/krishna-kudari/ratelimit"
-	"github.com/krishna-kudari/ratelimit/middleware/grpcmw"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	goratelimit "github.com/krishna-kudari/ratelimit"
+	"github.com/krishna-kudari/ratelimit/middleware/grpcmw"
 
 	testgrpc "google.golang.org/grpc/interop/grpc_testing"
 )

@@ -16,12 +16,13 @@ import (
 	"context"
 	"strconv"
 
-	goratelimit "github.com/krishna-kudari/ratelimit"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+
+	goratelimit "github.com/krishna-kudari/ratelimit"
 )
 
 // KeyFunc extracts the rate limiting key from a unary RPC context.

@@ -72,7 +72,7 @@ func ExampleLimiter_reset() {
 	result, _ := limiter.Allow(ctx, "user:123")
 	fmt.Printf("before reset: allowed=%v\n", result.Allowed)
 
-	limiter.Reset(ctx, "user:123")
+	_ = limiter.Reset(ctx, "user:123")
 	result, _ = limiter.Allow(ctx, "user:123")
 	fmt.Printf("after reset:  allowed=%v\n", result.Allowed)
 	// Output:

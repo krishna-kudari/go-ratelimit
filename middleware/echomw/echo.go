@@ -14,8 +14,9 @@ import (
 	"net/http"
 	"strconv"
 
-	goratelimit "github.com/krishna-kudari/ratelimit"
 	"github.com/labstack/echo/v4"
+
+	goratelimit "github.com/krishna-kudari/ratelimit"
 )
 
 // KeyFunc extracts the rate limiting key from an Echo context.

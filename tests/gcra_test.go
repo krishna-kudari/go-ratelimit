@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/krishna-kudari/ratelimit"
 	"github.com/redis/go-redis/v9"
+
+	goratelimit "github.com/krishna-kudari/ratelimit"
 )
 
 func TestNewGCRA(t *testing.T) {
