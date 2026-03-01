@@ -157,13 +157,26 @@ limiter = metrics.Wrap(limiter, metrics.TokenBucket, collector)
 goratelimit.WithHashTag() // keys become prefix:{key} for slot routing
 ```
 
-## Interactive Demo
+## Examples
 
-Run the interactive algorithm visualizer locally — no Redis required:
+| Example | What it covers | Run |
+|---------|---------------|-----|
+| [`basic`](examples/basic) | All 6 algorithms, AllowN, Reset, Builder | `go run ./examples/basic/` |
+| [`httpserver`](examples/httpserver) | net/http server with rate limiting | `go run ./examples/httpserver/` |
+| [`ginserver`](examples/ginserver) | Gin server with rate limiting | `go run ./examples/ginserver/` |
+| [`echoserver`](examples/echoserver) | Echo server with rate limiting | `go run ./examples/echoserver/` |
+| [`fiberserver`](examples/fiberserver) | Fiber server with rate limiting | `go run ./examples/fiberserver/` |
+| [`grpcserver`](examples/grpcserver) | gRPC interceptors (unary + stream) | `go run ./examples/grpcserver/` |
+| [`redis`](examples/redis) | Redis backend, Cluster hash tags | `go run ./examples/redis/` |
+| [`advanced`](examples/advanced) | Dynamic limits, cache, Prometheus, key strategies | `go run ./examples/advanced/` |
+| [`demo`](examples/demo) | Interactive web visualizer for all algorithms | `go run ./examples/demo/` |
+
+### Interactive Demo
+
+Run the algorithm visualizer locally — no Redis required:
 
 ```bash
-cd examples/demo
-go run .
+cd examples/demo && go run .
 ```
 
 Open `http://localhost:8080` to explore all six algorithms with real-time visualizations, configurable parameters, and burst testing.
