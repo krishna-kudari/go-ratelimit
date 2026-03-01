@@ -1,0 +1,26 @@
+{{define "content"}}
+<div class="algo-cards">
+  {{range .Algorithms}}
+  <div
+    data-algo-card="{{.Slug}}"
+    hx-get="/api/rate-limit/{{.Slug}}/view"
+    hx-target="#algorithm-content"
+    hx-swap="innerHTML"
+    class="algo-card"
+  >
+    <h3>{{.Name}}</h3>
+    <p>{{.ShortDesc}}</p>
+  </div>
+  {{end}}
+</div>
+
+<div id="algorithm-content" class="algo-content">
+  <div class="algo-empty">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+    </svg>
+    <p class="algo-empty-title">Select an algorithm above to explore</p>
+    <p class="algo-empty-subtitle">Each algorithm includes an interactive visualization and configurable parameters</p>
+  </div>
+</div>
+{{end}}

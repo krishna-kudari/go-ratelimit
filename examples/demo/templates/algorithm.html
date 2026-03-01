@@ -1,0 +1,82 @@
+{{define "algorithm.html"}}
+<div id="algorithm-detail" data-algorithm="{{.Meta.Slug}}">
+
+  <div class="algo-header">
+    <div class="algo-title-row">
+      <h2>{{.Meta.Name}}</h2>
+      <a class="btn-info-icon" href="https://github.com/krishna-kudari/ratelimit" target="_blank" title="View source">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+        </svg>
+      </a>
+    </div>
+    <p>{{.Meta.Description}}</p>
+    <div class="algo-badges">
+      <span class="badge-redis">{{.Meta.RedisType}}</span>
+      <span class="badge-cmd">{{.Meta.Commands}}</span>
+    </div>
+  </div>
+
+  <div class="algo-grid">
+
+    <div class="viz-panel">
+      <div id="viz-container" style="width: 100%;"></div>
+    </div>
+
+    <div class="sidebar">
+
+      <div class="panel">
+        <h3 class="panel-title">Configuration</h3>
+        <form id="config-form">
+          {{range .Meta.ConfigFields}}
+          <div class="config-group">
+            <label class="config-label">{{.Label}}</label>
+            {{if .Options}}
+            <select name="{{.Name}}" class="config-input">
+              {{range .Options}}
+              <option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>
+              {{end}}
+            </select>
+            {{else}}
+            <input
+              type="number"
+              name="{{.Name}}"
+              value="{{.Default}}"
+              min="{{.Min}}"
+              max="{{.Max}}"
+              step="{{.Step}}"
+              class="config-input"
+            />
+            {{end}}
+          </div>
+          {{end}}
+        </form>
+      </div>
+
+      <div class="panel">
+        <h3 class="panel-title">Actions</h3>
+        <button onclick="App.sendRequest()" class="btn-primary">Send Request</button>
+        <div class="burst-row">
+          <input type="number" id="burst-count" value="5" min="1" max="50" step="1" class="input-burst" />
+          <button onclick="App.sendBurst()" class="btn-secondary">Send Burst</button>
+        </div>
+        <button onclick="App.resetAlgorithm()" class="btn-reset">Reset Counters</button>
+      </div>
+
+      <div class="panel">
+        <h3 class="panel-title-sm">Request Log</h3>
+        <div id="result-log" class="log-container">
+          <p id="result-log-empty" class="log-empty">No requests yet</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+  if (window.App) {
+    window.App.init('{{.Meta.Slug}}', {{toJSON .DefaultConfig}});
+  }
+</script>
+{{end}}

@@ -215,13 +215,13 @@ func TestLocalCache_TTLExpiry(t *testing.T) {
 
 	ctx := context.Background()
 
-	lc.Allow(ctx, "k1")
+	_, _ = lc.Allow(ctx, "k1")
 	if mock.getCalls() != 1 {
 		t.Fatal("expected 1 call")
 	}
 
 	// Within TTL — should still be cached
-	lc.Allow(ctx, "k1")
+	_, _ = lc.Allow(ctx, "k1")
 	if mock.getCalls() != 1 {
 		t.Fatal("expected still 1 call within TTL")
 	}
@@ -229,7 +229,7 @@ func TestLocalCache_TTLExpiry(t *testing.T) {
 	// Wait for TTL to expire
 	time.Sleep(60 * time.Millisecond)
 
-	lc.Allow(ctx, "k1")
+	_, _ = lc.Allow(ctx, "k1")
 	if mock.getCalls() != 2 {
 		t.Fatalf("expected 2 calls after TTL expiry, got %d", mock.getCalls())
 	}
@@ -329,7 +329,7 @@ func TestLocalCache_Reset(t *testing.T) {
 	ctx := context.Background()
 
 	// Populate cache
-	lc.Allow(ctx, "k1")
+	_, _ = lc.Allow(ctx, "k1")
 	if mock.getCalls() != 1 {
 		t.Fatal("expected 1 call")
 	}
@@ -340,7 +340,7 @@ func TestLocalCache_Reset(t *testing.T) {
 	}
 
 	// Next call must hit backend (cache was evicted)
-	lc.Allow(ctx, "k1")
+	_, _ = lc.Allow(ctx, "k1")
 	if mock.getCalls() != 2 {
 		t.Fatalf("expected 2 backend calls after reset, got %d", mock.getCalls())
 	}
@@ -476,8 +476,8 @@ func TestLocalCache_Stats(t *testing.T) {
 		t.Fatalf("expected 0 keys initially, got %d", stats.Keys)
 	}
 
-	lc.Allow(ctx, "k1")
-	lc.Allow(ctx, "k2")
+	_, _ = lc.Allow(ctx, "k1")
+	_, _ = lc.Allow(ctx, "k2")
 
 	stats = lc.Stats()
 	if stats.Keys != 2 {
