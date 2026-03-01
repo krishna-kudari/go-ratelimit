@@ -2,6 +2,7 @@ package goratelimit_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -257,7 +258,7 @@ func TestRedisRateLimiter_Allow(t *testing.T) {
 	})
 
 	t.Run("rejects requests exceeding limit", func(t *testing.T) {
-		userID := "test-user-2"
+		userID := fmt.Sprintf("test-user-2-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewRedisRateLimiter(ctx, 3, 60)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -288,8 +289,8 @@ func TestRedisRateLimiter_Allow(t *testing.T) {
 	})
 
 	t.Run("tracks separate limits per user", func(t *testing.T) {
-		user1 := "test-user-3"
-		user2 := "test-user-4"
+		user1 := fmt.Sprintf("test-user-3-%d", time.Now().UnixNano())
+		user2 := fmt.Sprintf("test-user-4-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewRedisRateLimiter(ctx, 2, 60)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

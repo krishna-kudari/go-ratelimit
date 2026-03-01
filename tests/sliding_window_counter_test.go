@@ -313,22 +313,18 @@ func TestSlidingWindowCounterRedisRateLimiter_Allow(t *testing.T) {
 			t.Error("11th request should be rejected")
 		}
 
-		// Wait for window to slide (2 seconds)
-		time.Sleep(2100 * time.Millisecond)
+		// Wait for window to slide (2 seconds) plus additional time to be well into the new window
+		// We need elapsed > 0 so that weightedPrev < 10
+		// The weighted previous count decreases as we progress through the new window
+		time.Sleep(2100 * time.Millisecond) // Wait for window to slide
 
-		// In new window: previous window had 10, current window starts at 0
-		// At start of new window: elapsed = 0, weightedPrev = 10 * 1 = 10
-		// estimatedCount = 10 + 0 = 10, which is at limit
-		// So it might still reject, need to wait a bit for the weight to decrease
-		// Actually, let's check if it allows - the previous window count should be weighted
-		allowed, _, _, _ = limiter.Allow(ctx, userID)
-		// It might still reject if we're at the very start of the window
-		// Let's wait a tiny bit more
-		time.Sleep(100 * time.Millisecond)
-		allowed, _, _, _ = limiter.Allow(ctx, userID)
-		if !allowed {
-			// If still not allowed, wait a bit more for weight to decrease
-			time.Sleep(500 * time.Millisecond)
+		// Try multiple times with increasing wait periods
+		// As elapsed increases, weightedPrev decreases: weightedPrev = 10 * (1 - elapsed)
+		// We need elapsed such that weightedPrev < 10, i.e., elapsed > 0
+		maxAttempts := 5
+		allowed = false
+		for i := 0; i < maxAttempts && !allowed; i++ {
+			time.Sleep(300 * time.Millisecond) // Wait a bit more each iteration
 			allowed, _, _, _ = limiter.Allow(ctx, userID)
 		}
 		if !allowed {
