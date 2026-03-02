@@ -155,14 +155,3 @@ func (o *Options) FormatKeySuffix(key, suffix string) string {
 	}
 	return o.KeyPrefix + ":" + key + ":" + suffix
 }
-
-// redisClient returns the effective redis.UniversalClient from Options,
-// checking Store (if it's a RedisStore) then falling back to RedisClient.
-func (o *Options) redisClient() redis.UniversalClient {
-	return o.RedisClient
-}
-
-// isRedis returns true if a Redis backend is configured.
-func (o *Options) isRedis() bool {
-	return o.RedisClient != nil
-}
