@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	goratelimit "github.com/krishna-kudari/ratelimit"
 	"github.com/krishna-kudari/ratelimit/middleware"
 )
@@ -19,9 +22,7 @@ func okHandler() http.Handler {
 
 func TestRateLimit_AllowsWithinLimit(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(5, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	handler := middleware.RateLimit(limiter, middleware.KeyByIP)(okHandler())
 
@@ -31,25 +32,17 @@ func TestRateLimit_AllowsWithinLimit(t *testing.T) {
 		req.RemoteAddr = "192.168.1.1:12345"
 		handler.ServeHTTP(rr, req)
 
-		if rr.Code != http.StatusOK {
-			t.Errorf("request %d: expected 200, got %d", i+1, rr.Code)
-		}
-		if rr.Header().Get("X-RateLimit-Limit") != "5" {
-			t.Errorf("request %d: expected X-RateLimit-Limit=5, got %s", i+1, rr.Header().Get("X-RateLimit-Limit"))
-		}
+		assert.Equal(t, http.StatusOK, rr.Code, "request %d", i+1)
+		assert.Equal(t, "5", rr.Header().Get("X-RateLimit-Limit"), "request %d: expected X-RateLimit-Limit=5", i+1)
 		remaining, _ := strconv.ParseInt(rr.Header().Get("X-RateLimit-Remaining"), 10, 64)
 		expected := int64(5 - i - 1)
-		if remaining != expected {
-			t.Errorf("request %d: expected remaining=%d, got %d", i+1, expected, remaining)
-		}
+		assert.Equal(t, expected, remaining, "request %d: expected remaining=%d", i+1, expected)
 	}
 }
 
 func TestRateLimit_DeniesExceedingLimit(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(3, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	handler := middleware.RateLimit(limiter, middleware.KeyByIP)(okHandler())
 
@@ -58,9 +51,7 @@ func TestRateLimit_DeniesExceedingLimit(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/test", nil)
 		req.RemoteAddr = "10.0.0.1:9999"
 		handler.ServeHTTP(rr, req)
-		if rr.Code != http.StatusOK {
-			t.Fatalf("request %d should be allowed", i+1)
-		}
+		require.Equal(t, http.StatusOK, rr.Code, "request %d should be allowed", i+1)
 	}
 
 	rr := httptest.NewRecorder()
@@ -68,22 +59,14 @@ func TestRateLimit_DeniesExceedingLimit(t *testing.T) {
 	req.RemoteAddr = "10.0.0.1:9999"
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusTooManyRequests {
-		t.Errorf("expected 429, got %d", rr.Code)
-	}
-	if rr.Header().Get("Retry-After") == "" {
-		t.Error("expected Retry-After header on 429 response")
-	}
-	if rr.Header().Get("X-RateLimit-Remaining") != "0" {
-		t.Errorf("expected remaining=0, got %s", rr.Header().Get("X-RateLimit-Remaining"))
-	}
+	assert.Equal(t, http.StatusTooManyRequests, rr.Code)
+	assert.NotEmpty(t, rr.Header().Get("Retry-After"), "expected Retry-After header on 429 response")
+	assert.Equal(t, "0", rr.Header().Get("X-RateLimit-Remaining"))
 }
 
 func TestRateLimit_SeparateKeysTrackedIndependently(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(2, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	handler := middleware.RateLimit(limiter, middleware.KeyByIP)(okHandler())
 
@@ -100,25 +83,19 @@ func TestRateLimit_SeparateKeysTrackedIndependently(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "1.1.1.1:1234"
 	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusTooManyRequests {
-		t.Error("IP 1 should be rate limited")
-	}
+	assert.Equal(t, http.StatusTooManyRequests, rr.Code, "IP 1 should be rate limited")
 
 	// IP 2 should still be allowed
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "2.2.2.2:5678"
 	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Error("IP 2 should not be rate limited")
-	}
+	assert.Equal(t, http.StatusOK, rr.Code, "IP 2 should not be rate limited")
 }
 
 func TestRateLimit_ExcludePaths(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(1, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	handler := middleware.RateLimitWithConfig(middleware.Config{
 		Limiter:      limiter,
@@ -131,42 +108,32 @@ func TestRateLimit_ExcludePaths(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/data", nil)
 	req.RemoteAddr = "3.3.3.3:1111"
 	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatal("first request should be allowed")
-	}
+	require.Equal(t, http.StatusOK, rr.Code, "first request should be allowed")
 
 	// Rate limited on normal path
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/api/data", nil)
 	req.RemoteAddr = "3.3.3.3:1111"
 	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusTooManyRequests {
-		t.Error("second request to /api/data should be denied")
-	}
+	assert.Equal(t, http.StatusTooManyRequests, rr.Code, "second request to /api/data should be denied")
 
 	// Excluded paths bypass rate limiting
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/health", nil)
 	req.RemoteAddr = "3.3.3.3:1111"
 	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Error("/health should bypass rate limiting")
-	}
+	assert.Equal(t, http.StatusOK, rr.Code, "/health should bypass rate limiting")
 
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/ready", nil)
 	req.RemoteAddr = "3.3.3.3:1111"
 	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Error("/ready should bypass rate limiting")
-	}
+	assert.Equal(t, http.StatusOK, rr.Code, "/ready should bypass rate limiting")
 }
 
 func TestRateLimit_CustomDeniedHandler(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(1, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	customCalled := false
 	handler := middleware.RateLimitWithConfig(middleware.Config{
@@ -192,19 +159,13 @@ func TestRateLimit_CustomDeniedHandler(t *testing.T) {
 	req.RemoteAddr = "4.4.4.4:1111"
 	handler.ServeHTTP(rr, req)
 
-	if !customCalled {
-		t.Error("custom denied handler should have been called")
-	}
-	if rr.Header().Get("Content-Type") != "application/json" {
-		t.Error("custom handler should set Content-Type to application/json")
-	}
+	assert.True(t, customCalled, "custom denied handler should have been called")
+	assert.Equal(t, "application/json", rr.Header().Get("Content-Type"), "custom handler should set Content-Type to application/json")
 }
 
 func TestRateLimit_HeadersDisabled(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(5, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	noHeaders := false
 	handler := middleware.RateLimitWithConfig(middleware.Config{
@@ -218,15 +179,9 @@ func TestRateLimit_HeadersDisabled(t *testing.T) {
 	req.RemoteAddr = "5.5.5.5:1111"
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatal("request should be allowed")
-	}
-	if rr.Header().Get("X-RateLimit-Limit") != "" {
-		t.Error("X-RateLimit-Limit should not be set when headers disabled")
-	}
-	if rr.Header().Get("X-RateLimit-Remaining") != "" {
-		t.Error("X-RateLimit-Remaining should not be set when headers disabled")
-	}
+	require.Equal(t, http.StatusOK, rr.Code, "request should be allowed")
+	assert.Empty(t, rr.Header().Get("X-RateLimit-Limit"), "X-RateLimit-Limit should not be set when headers disabled")
+	assert.Empty(t, rr.Header().Get("X-RateLimit-Remaining"), "X-RateLimit-Remaining should not be set when headers disabled")
 }
 
 func TestKeyByIP_XForwardedFor(t *testing.T) {
@@ -235,9 +190,7 @@ func TestKeyByIP_XForwardedFor(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:1234"
 
 	key := middleware.KeyByIP(req)
-	if key != "203.0.113.50" {
-		t.Errorf("expected first IP from X-Forwarded-For, got %q", key)
-	}
+	assert.Equal(t, "203.0.113.50", key, "expected first IP from X-Forwarded-For")
 }
 
 func TestKeyByIP_XRealIP(t *testing.T) {
@@ -246,9 +199,7 @@ func TestKeyByIP_XRealIP(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:1234"
 
 	key := middleware.KeyByIP(req)
-	if key != "198.51.100.42" {
-		t.Errorf("expected X-Real-IP value, got %q", key)
-	}
+	assert.Equal(t, "198.51.100.42", key, "expected X-Real-IP value")
 }
 
 func TestKeyByIP_RemoteAddr(t *testing.T) {
@@ -256,9 +207,7 @@ func TestKeyByIP_RemoteAddr(t *testing.T) {
 	req.RemoteAddr = "192.168.1.100:54321"
 
 	key := middleware.KeyByIP(req)
-	if key != "192.168.1.100" {
-		t.Errorf("expected RemoteAddr IP, got %q", key)
-	}
+	assert.Equal(t, "192.168.1.100", key, "expected RemoteAddr IP")
 }
 
 func TestKeyByHeader(t *testing.T) {
@@ -267,9 +216,7 @@ func TestKeyByHeader(t *testing.T) {
 
 	keyFunc := middleware.KeyByHeader("X-API-Key")
 	key := keyFunc(req)
-	if key != "sk-test-12345" {
-		t.Errorf("expected header value, got %q", key)
-	}
+	assert.Equal(t, "sk-test-12345", key, "expected header value")
 }
 
 func TestKeyByPathAndIP(t *testing.T) {
@@ -277,9 +224,7 @@ func TestKeyByPathAndIP(t *testing.T) {
 	req.RemoteAddr = "10.0.0.5:8080"
 
 	key := middleware.KeyByPathAndIP(req)
-	if key != "/api/users:10.0.0.5" {
-		t.Errorf("expected path:ip, got %q", key)
-	}
+	assert.Equal(t, "/api/users:10.0.0.5", key, "expected path:ip")
 }
 
 func TestRateLimit_DifferentAlgorithms(t *testing.T) {
@@ -302,18 +247,14 @@ func TestRateLimit_DifferentAlgorithms(t *testing.T) {
 				req := httptest.NewRequest("GET", "/", nil)
 				req.RemoteAddr = "9.9.9.9:1111"
 				handler.ServeHTTP(rr, req)
-				if rr.Code != http.StatusOK {
-					t.Errorf("%s: request %d should be allowed, got %d", alg.name, i+1, rr.Code)
-				}
+				assert.Equal(t, http.StatusOK, rr.Code, "%s: request %d should be allowed", alg.name, i+1)
 			}
 
 			rr := httptest.NewRecorder()
 			req := httptest.NewRequest("GET", "/", nil)
 			req.RemoteAddr = "9.9.9.9:1111"
 			handler.ServeHTTP(rr, req)
-			if rr.Code != http.StatusTooManyRequests {
-				t.Errorf("%s: 4th request should be denied, got %d", alg.name, rr.Code)
-			}
+			assert.Equal(t, http.StatusTooManyRequests, rr.Code, "%s: 4th request should be denied", alg.name)
 		})
 	}
 }

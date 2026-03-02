@@ -33,6 +33,9 @@ Thumbs.db
 .env.local
 .env.*.local
 
+# Test output
+test-output.json
+
 # Temporary
 tmp/
 *.tmp

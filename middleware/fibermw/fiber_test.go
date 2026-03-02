@@ -1,12 +1,13 @@
 package fibermw_test
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	goratelimit "github.com/krishna-kudari/ratelimit"
 	"github.com/krishna-kudari/ratelimit/middleware/fibermw"
@@ -35,12 +36,8 @@ func TestRateLimit_AllowsWithinLimit(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		resp := doReq(app, "GET", "/api/data", nil)
-		if resp.StatusCode != 200 {
-			t.Fatalf("request %d: expected 200, got %d", i+1, resp.StatusCode)
-		}
-		if resp.Header.Get("X-RateLimit-Limit") != "5" {
-			t.Errorf("request %d: expected limit=5, got %s", i+1, resp.Header.Get("X-RateLimit-Limit"))
-		}
+		require.Equal(t, 200, resp.StatusCode, "request %d: expected 200", i+1)
+		assert.Equal(t, "5", resp.Header.Get("X-RateLimit-Limit"), "request %d: expected limit=5", i+1)
 	}
 }
 
@@ -53,13 +50,8 @@ func TestRateLimit_DeniesExceedingLimit(t *testing.T) {
 	}
 
 	resp := doReq(app, "GET", "/api/data", nil)
-	if resp.StatusCode != 429 {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected 429, got %d, body: %s", resp.StatusCode, body)
-	}
-	if resp.Header.Get("Retry-After") == "" {
-		t.Error("expected Retry-After header")
-	}
+	require.Equal(t, 429, resp.StatusCode)
+	assert.NotEmpty(t, resp.Header.Get("Retry-After"), "expected Retry-After header")
 }
 
 func TestRateLimit_ExcludePaths(t *testing.T) {
@@ -73,9 +65,7 @@ func TestRateLimit_ExcludePaths(t *testing.T) {
 	doReq(app, "GET", "/api/data", nil)
 
 	resp := doReq(app, "GET", "/health", nil)
-	if resp.StatusCode != 200 {
-		t.Errorf("health should bypass, got %d", resp.StatusCode)
-	}
+	assert.Equal(t, 200, resp.StatusCode, "health should bypass")
 }
 
 func TestRateLimit_CustomDeniedHandler(t *testing.T) {
@@ -93,9 +83,7 @@ func TestRateLimit_CustomDeniedHandler(t *testing.T) {
 	doReq(app, "GET", "/api/data", nil)
 	doReq(app, "GET", "/api/data", nil)
 
-	if !customCalled {
-		t.Error("custom denied handler should be called")
-	}
+	assert.True(t, customCalled, "custom denied handler should be called")
 }
 
 func TestRateLimit_HeadersDisabled(t *testing.T) {
@@ -108,9 +96,7 @@ func TestRateLimit_HeadersDisabled(t *testing.T) {
 	}))
 
 	resp := doReq(app, "GET", "/api/data", nil)
-	if resp.Header.Get("X-RateLimit-Limit") != "" {
-		t.Error("headers should not be set")
-	}
+	assert.Empty(t, resp.Header.Get("X-RateLimit-Limit"), "headers should not be set")
 }
 
 func TestKeyByHeader(t *testing.T) {
@@ -118,19 +104,13 @@ func TestKeyByHeader(t *testing.T) {
 	app := newApp(fibermw.RateLimit(limiter, fibermw.KeyByHeader("X-API-Key")))
 
 	resp := doReq(app, "GET", "/api/data", map[string]string{"X-API-Key": "key-A"})
-	if resp.StatusCode != 200 {
-		t.Fatal("key-A should be allowed")
-	}
+	require.Equal(t, 200, resp.StatusCode, "key-A should be allowed")
 
 	resp = doReq(app, "GET", "/api/data", map[string]string{"X-API-Key": "key-A"})
-	if resp.StatusCode != 429 {
-		t.Fatal("key-A should be denied")
-	}
+	require.Equal(t, 429, resp.StatusCode, "key-A should be denied")
 
 	resp = doReq(app, "GET", "/api/data", map[string]string{"X-API-Key": "key-B"})
-	if resp.StatusCode != 200 {
-		t.Fatal("key-B should be allowed")
-	}
+	require.Equal(t, 200, resp.StatusCode, "key-B should be allowed")
 }
 
 func must(l goratelimit.Limiter, err error) goratelimit.Limiter {

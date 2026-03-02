@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	goratelimit "github.com/krishna-kudari/ratelimit"
 	"github.com/krishna-kudari/ratelimit/middleware/ginmw"
@@ -32,12 +34,8 @@ func TestRateLimit_AllowsWithinLimit(t *testing.T) {
 		req.RemoteAddr = "1.2.3.4:1234"
 		router.ServeHTTP(w, req)
 
-		if w.Code != 200 {
-			t.Fatalf("request %d: expected 200, got %d", i+1, w.Code)
-		}
-		if w.Header().Get("X-RateLimit-Limit") != "5" {
-			t.Errorf("request %d: expected limit=5, got %s", i+1, w.Header().Get("X-RateLimit-Limit"))
-		}
+		require.Equal(t, 200, w.Code, "request %d: expected 200", i+1)
+		assert.Equal(t, "5", w.Header().Get("X-RateLimit-Limit"), "request %d: expected limit=5", i+1)
 	}
 }
 
@@ -57,12 +55,8 @@ func TestRateLimit_DeniesExceedingLimit(t *testing.T) {
 	req.RemoteAddr = "5.6.7.8:1234"
 	router.ServeHTTP(w, req)
 
-	if w.Code != 429 {
-		t.Fatalf("expected 429, got %d", w.Code)
-	}
-	if w.Header().Get("Retry-After") == "" {
-		t.Error("expected Retry-After header")
-	}
+	require.Equal(t, 429, w.Code)
+	assert.NotEmpty(t, w.Header().Get("Retry-After"), "expected Retry-After header")
 }
 
 func TestRateLimit_ExcludePaths(t *testing.T) {
@@ -84,9 +78,7 @@ func TestRateLimit_ExcludePaths(t *testing.T) {
 	req = httptest.NewRequest("GET", "/health", nil)
 	req.RemoteAddr = "10.0.0.1:1234"
 	router.ServeHTTP(w, req)
-	if w.Code != 200 {
-		t.Errorf("health should bypass, got %d", w.Code)
-	}
+	assert.Equal(t, 200, w.Code, "health should bypass")
 }
 
 func TestRateLimit_CustomDeniedHandler(t *testing.T) {
@@ -111,9 +103,7 @@ func TestRateLimit_CustomDeniedHandler(t *testing.T) {
 	req.RemoteAddr = "11.0.0.1:1234"
 	router.ServeHTTP(w, req)
 
-	if !customCalled {
-		t.Error("custom denied handler should be called")
-	}
+	assert.True(t, customCalled, "custom denied handler should be called")
 }
 
 func TestRateLimit_HeadersDisabled(t *testing.T) {
@@ -130,9 +120,7 @@ func TestRateLimit_HeadersDisabled(t *testing.T) {
 	req.RemoteAddr = "12.0.0.1:1234"
 	router.ServeHTTP(w, req)
 
-	if w.Header().Get("X-RateLimit-Limit") != "" {
-		t.Error("headers should not be set")
-	}
+	assert.Empty(t, w.Header().Get("X-RateLimit-Limit"), "headers should not be set")
 }
 
 func TestKeyByHeader(t *testing.T) {
@@ -144,27 +132,21 @@ func TestKeyByHeader(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/data", nil)
 	req.Header.Set("X-API-Key", "key-A")
 	router.ServeHTTP(w, req)
-	if w.Code != 200 {
-		t.Fatal("key-A should be allowed")
-	}
+	require.Equal(t, 200, w.Code, "key-A should be allowed")
 
 	// key-A: denied
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/api/data", nil)
 	req.Header.Set("X-API-Key", "key-A")
 	router.ServeHTTP(w, req)
-	if w.Code != 429 {
-		t.Fatal("key-A should be denied")
-	}
+	require.Equal(t, 429, w.Code, "key-A should be denied")
 
 	// key-B: allowed (different key)
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/api/data", nil)
 	req.Header.Set("X-API-Key", "key-B")
 	router.ServeHTTP(w, req)
-	if w.Code != 200 {
-		t.Fatal("key-B should be allowed")
-	}
+	require.Equal(t, 200, w.Code, "key-B should be allowed")
 }
 
 func must(l goratelimit.Limiter, err error) goratelimit.Limiter {

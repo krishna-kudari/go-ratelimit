@@ -2,15 +2,15 @@ package goratelimit
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestFormatKey_Plain(t *testing.T) {
 	o := defaultOptions()
 	got := o.FormatKey("user:123")
 	want := "ratelimit:user:123"
-	if got != want {
-		t.Errorf("FormatKey plain: got %q, want %q", got, want)
-	}
+	assert.Equal(t, want, got)
 }
 
 func TestFormatKey_HashTag(t *testing.T) {
@@ -18,18 +18,14 @@ func TestFormatKey_HashTag(t *testing.T) {
 	o.HashTag = true
 	got := o.FormatKey("user:123")
 	want := "ratelimit:{user:123}"
-	if got != want {
-		t.Errorf("FormatKey hash-tag: got %q, want %q", got, want)
-	}
+	assert.Equal(t, want, got)
 }
 
 func TestFormatKeySuffix_Plain(t *testing.T) {
 	o := defaultOptions()
 	got := o.FormatKeySuffix("user:123", "42")
 	want := "ratelimit:user:123:42"
-	if got != want {
-		t.Errorf("FormatKeySuffix plain: got %q, want %q", got, want)
-	}
+	assert.Equal(t, want, got)
 }
 
 func TestFormatKeySuffix_HashTag(t *testing.T) {
@@ -37,9 +33,7 @@ func TestFormatKeySuffix_HashTag(t *testing.T) {
 	o.HashTag = true
 	got := o.FormatKeySuffix("user:123", "42")
 	want := "ratelimit:{user:123}:42"
-	if got != want {
-		t.Errorf("FormatKeySuffix hash-tag: got %q, want %q", got, want)
-	}
+	assert.Equal(t, want, got)
 }
 
 func TestFormatKeySuffix_HashTag_SlotConsistency(t *testing.T) {
@@ -51,33 +45,23 @@ func TestFormatKeySuffix_HashTag_SlotConsistency(t *testing.T) {
 
 	tag1 := extractHashTag(k1)
 	tag2 := extractHashTag(k2)
-	if tag1 != tag2 {
-		t.Errorf("hash tags differ: %q vs %q (keys: %q, %q)", tag1, tag2, k1, k2)
-	}
-	if tag1 != "user:123" {
-		t.Errorf("expected hash tag %q, got %q", "user:123", tag1)
-	}
+	assert.Equal(t, tag2, tag1, "hash tags differ for keys: %q, %q", k1, k2)
+	assert.Equal(t, "user:123", tag1)
 }
 
 func TestWithHashTag_Option(t *testing.T) {
 	o := applyOptions([]Option{WithHashTag()})
-	if !o.HashTag {
-		t.Error("WithHashTag should set HashTag to true")
-	}
+	assert.True(t, o.HashTag, "WithHashTag should set HashTag to true")
 	got := o.FormatKey("ip:10.0.0.1")
 	want := "ratelimit:{ip:10.0.0.1}"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
+	assert.Equal(t, want, got)
 }
 
 func TestFormatKey_CustomPrefix_HashTag(t *testing.T) {
 	o := applyOptions([]Option{WithKeyPrefix("myapp"), WithHashTag()})
 	got := o.FormatKey("api-key-abc")
 	want := "myapp:{api-key-abc}"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
+	assert.Equal(t, want, got)
 }
 
 // extractHashTag returns the content between the first { and the next }.

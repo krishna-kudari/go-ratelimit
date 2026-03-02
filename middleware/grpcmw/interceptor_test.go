@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -37,9 +39,7 @@ func (s *testServer) UnaryCall(_ context.Context, req *testgrpc.SimpleRequest) (
 func startServer(t *testing.T, opts ...grpc.ServerOption) (testgrpc.TestServiceClient, func()) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	srv := grpc.NewServer(opts...)
 	testgrpc.RegisterTestServiceServer(srv, &testServer{})
@@ -51,8 +51,8 @@ func startServer(t *testing.T, opts ...grpc.ServerOption) (testgrpc.TestServiceC
 	)
 	if err != nil {
 		srv.Stop()
-		t.Fatal(err)
 	}
+	require.NoError(t, err)
 
 	client := testgrpc.NewTestServiceClient(conn)
 	cleanup := func() {
@@ -66,9 +66,7 @@ func startServer(t *testing.T, opts ...grpc.ServerOption) (testgrpc.TestServiceC
 
 func TestUnaryServerInterceptor_AllowsWithinLimit(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(5, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	client, cleanup := startServer(t,
 		grpc.ChainUnaryInterceptor(grpcmw.UnaryServerInterceptor(limiter, grpcmw.KeyByPeer)),
@@ -79,22 +77,17 @@ func TestUnaryServerInterceptor_AllowsWithinLimit(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		var header metadata.MD
 		_, err := client.EmptyCall(ctx, &testgrpc.Empty{}, grpc.Header(&header))
-		if err != nil {
-			t.Fatalf("request %d: unexpected error: %v", i+1, err)
-		}
+		require.NoError(t, err, "request %d: unexpected error", i+1)
 
 		limit := header.Get("x-ratelimit-limit")
-		if len(limit) == 0 || limit[0] != "5" {
-			t.Errorf("request %d: expected x-ratelimit-limit=5, got %v", i+1, limit)
-		}
+		require.NotEmpty(t, limit, "request %d: expected x-ratelimit-limit", i+1)
+		assert.Equal(t, "5", limit[0], "request %d: expected x-ratelimit-limit=5", i+1)
 	}
 }
 
 func TestUnaryServerInterceptor_DeniesExceedingLimit(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(3, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	client, cleanup := startServer(t,
 		grpc.ChainUnaryInterceptor(grpcmw.UnaryServerInterceptor(limiter, grpcmw.KeyByPeer)),
@@ -106,30 +99,20 @@ func TestUnaryServerInterceptor_DeniesExceedingLimit(t *testing.T) {
 	// Exhaust limit
 	for i := 0; i < 3; i++ {
 		_, err := client.EmptyCall(ctx, &testgrpc.Empty{})
-		if err != nil {
-			t.Fatalf("request %d should be allowed", i+1)
-		}
+		require.NoError(t, err, "request %d should be allowed", i+1)
 	}
 
 	// 4th request should be denied
 	_, err = client.EmptyCall(ctx, &testgrpc.Empty{})
-	if err == nil {
-		t.Fatal("expected error on 4th request")
-	}
+	require.Error(t, err, "expected error on 4th request")
 	st, ok := status.FromError(err)
-	if !ok {
-		t.Fatalf("expected gRPC status error, got %v", err)
-	}
-	if st.Code() != codes.ResourceExhausted {
-		t.Errorf("expected ResourceExhausted, got %v", st.Code())
-	}
+	require.True(t, ok, "expected gRPC status error, got %v", err)
+	assert.Equal(t, codes.ResourceExhausted, st.Code())
 }
 
 func TestUnaryServerInterceptor_RateLimitHeaders(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(10, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	client, cleanup := startServer(t,
 		grpc.ChainUnaryInterceptor(grpcmw.UnaryServerInterceptor(limiter, grpcmw.KeyByPeer)),
@@ -138,22 +121,16 @@ func TestUnaryServerInterceptor_RateLimitHeaders(t *testing.T) {
 
 	var header metadata.MD
 	_, err = client.EmptyCall(context.Background(), &testgrpc.Empty{}, grpc.Header(&header))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	for _, key := range []string{"x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"} {
-		if vals := header.Get(key); len(vals) == 0 {
-			t.Errorf("expected %s header in response metadata", key)
-		}
+		assert.NotEmpty(t, header.Get(key), "expected %s header in response metadata", key)
 	}
 }
 
 func TestUnaryServerInterceptor_HeadersDisabled(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(10, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	noHeaders := false
 	client, cleanup := startServer(t,
@@ -167,20 +144,14 @@ func TestUnaryServerInterceptor_HeadersDisabled(t *testing.T) {
 
 	var header metadata.MD
 	_, err = client.EmptyCall(context.Background(), &testgrpc.Empty{}, grpc.Header(&header))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	if vals := header.Get("x-ratelimit-limit"); len(vals) > 0 {
-		t.Error("headers should not be set when disabled")
-	}
+	assert.Empty(t, header.Get("x-ratelimit-limit"), "headers should not be set when disabled")
 }
 
 func TestUnaryServerInterceptor_ExcludeMethods(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(1, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	client, cleanup := startServer(t,
 		grpc.ChainUnaryInterceptor(grpcmw.UnaryServerInterceptorWithConfig(grpcmw.Config{
@@ -198,17 +169,13 @@ func TestUnaryServerInterceptor_ExcludeMethods(t *testing.T) {
 	// EmptyCall is excluded — should always succeed
 	for i := 0; i < 5; i++ {
 		_, err := client.EmptyCall(ctx, &testgrpc.Empty{})
-		if err != nil {
-			t.Fatalf("excluded method should not be rate limited, request %d: %v", i+1, err)
-		}
+		require.NoError(t, err, "excluded method should not be rate limited, request %d", i+1)
 	}
 }
 
 func TestUnaryServerInterceptor_CustomDeniedHandler(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(1, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	customCalled := false
 	client, cleanup := startServer(t,
@@ -230,25 +197,17 @@ func TestUnaryServerInterceptor_CustomDeniedHandler(t *testing.T) {
 
 	// Trigger denial
 	_, err = client.EmptyCall(ctx, &testgrpc.Empty{})
-	if err == nil {
-		t.Fatal("expected denial")
-	}
+	require.Error(t, err, "expected denial")
 	st, _ := status.FromError(err)
-	if st.Code() != codes.Unavailable {
-		t.Errorf("expected Unavailable from custom handler, got %v", st.Code())
-	}
+	assert.Equal(t, codes.Unavailable, st.Code(), "expected Unavailable from custom handler")
 	// customCalled is set in the server goroutine; give it a moment
 	time.Sleep(10 * time.Millisecond)
-	if !customCalled {
-		t.Error("custom denied handler should have been called")
-	}
+	assert.True(t, customCalled, "custom denied handler should have been called")
 }
 
 func TestUnaryServerInterceptor_KeyByMetadata(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(2, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	client, cleanup := startServer(t,
 		grpc.ChainUnaryInterceptor(grpcmw.UnaryServerInterceptor(limiter, grpcmw.KeyByMetadata("x-api-key"))),
@@ -259,30 +218,22 @@ func TestUnaryServerInterceptor_KeyByMetadata(t *testing.T) {
 	ctxA := metadata.AppendToOutgoingContext(context.Background(), "x-api-key", "key-A")
 	for i := 0; i < 2; i++ {
 		_, err := client.EmptyCall(ctxA, &testgrpc.Empty{})
-		if err != nil {
-			t.Fatalf("key-A request %d should succeed: %v", i+1, err)
-		}
+		require.NoError(t, err, "key-A request %d should succeed", i+1)
 	}
 
 	// key-A: 3rd request should be denied
 	_, err = client.EmptyCall(ctxA, &testgrpc.Empty{})
-	if err == nil {
-		t.Fatal("key-A 3rd request should be denied")
-	}
+	require.Error(t, err, "key-A 3rd request should be denied")
 
 	// key-B: should still be allowed (separate key)
 	ctxB := metadata.AppendToOutgoingContext(context.Background(), "x-api-key", "key-B")
 	_, err = client.EmptyCall(ctxB, &testgrpc.Empty{})
-	if err != nil {
-		t.Fatalf("key-B should be allowed: %v", err)
-	}
+	require.NoError(t, err, "key-B should be allowed")
 }
 
 func TestUnaryServerInterceptor_KeyByMethod(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(1, 60)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	client, cleanup := startServer(t,
 		grpc.ChainUnaryInterceptor(grpcmw.UnaryServerInterceptor(limiter, grpcmw.KeyByMethod)),
@@ -293,21 +244,15 @@ func TestUnaryServerInterceptor_KeyByMethod(t *testing.T) {
 
 	// EmptyCall — use up its 1 allowed request
 	_, err = client.EmptyCall(ctx, &testgrpc.Empty{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// EmptyCall — should be denied
 	_, err = client.EmptyCall(ctx, &testgrpc.Empty{})
-	if err == nil {
-		t.Fatal("2nd EmptyCall should be denied")
-	}
+	require.Error(t, err, "2nd EmptyCall should be denied")
 
 	// UnaryCall — different method, should succeed
 	_, err = client.UnaryCall(ctx, &testgrpc.SimpleRequest{})
-	if err != nil {
-		t.Fatalf("UnaryCall should be allowed (different method key): %v", err)
-	}
+	require.NoError(t, err, "UnaryCall should be allowed (different method key)")
 }
 
 func TestUnaryServerInterceptor_DifferentAlgorithms(t *testing.T) {
@@ -331,15 +276,11 @@ func TestUnaryServerInterceptor_DifferentAlgorithms(t *testing.T) {
 			ctx := context.Background()
 			for i := 0; i < 3; i++ {
 				_, err := client.EmptyCall(ctx, &testgrpc.Empty{})
-				if err != nil {
-					t.Fatalf("%s: request %d should be allowed: %v", alg.name, i+1, err)
-				}
+				require.NoError(t, err, "%s: request %d should be allowed", alg.name, i+1)
 			}
 
 			_, err := client.EmptyCall(ctx, &testgrpc.Empty{})
-			if err == nil {
-				t.Errorf("%s: 4th request should be denied", alg.name)
-			}
+			assert.Error(t, err, "%s: 4th request should be denied", alg.name)
 		})
 	}
 }

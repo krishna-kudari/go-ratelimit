@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	goratelimit "github.com/krishna-kudari/ratelimit"
 )
@@ -19,61 +21,25 @@ func TestNewSlidingWindowCounter(t *testing.T) {
 		expectError    bool
 		errorSubstring string
 	}{
-		{
-			name:          "valid parameters",
-			maxRequests:   10,
-			windowSeconds: 60,
-			expectError:   false,
-		},
-		{
-			name:           "zero max requests",
-			maxRequests:    0,
-			windowSeconds:  60,
-			expectError:    true,
-			errorSubstring: "must be positive",
-		},
-		{
-			name:           "negative max requests",
-			maxRequests:    -1,
-			windowSeconds:  60,
-			expectError:    true,
-			errorSubstring: "must be positive",
-		},
-		{
-			name:           "zero window seconds",
-			maxRequests:    10,
-			windowSeconds:  0,
-			expectError:    true,
-			errorSubstring: "must be positive",
-		},
-		{
-			name:           "negative window seconds",
-			maxRequests:    10,
-			windowSeconds:  -1,
-			expectError:    true,
-			errorSubstring: "must be positive",
-		},
+		{name: "valid parameters", maxRequests: 10, windowSeconds: 60, expectError: false},
+		{name: "zero max requests", maxRequests: 0, windowSeconds: 60, expectError: true, errorSubstring: "must be positive"},
+		{name: "negative max requests", maxRequests: -1, windowSeconds: 60, expectError: true, errorSubstring: "must be positive"},
+		{name: "zero window seconds", maxRequests: 10, windowSeconds: 0, expectError: true, errorSubstring: "must be positive"},
+		{name: "negative window seconds", maxRequests: 10, windowSeconds: -1, expectError: true, errorSubstring: "must be positive"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			limiter, err := goratelimit.NewSlidingWindowCounter(tt.maxRequests, tt.windowSeconds)
 			if tt.expectError {
-				if err == nil {
-					t.Errorf("expected error but got none")
-				} else if tt.errorSubstring != "" && !contains(err.Error(), tt.errorSubstring) {
-					t.Errorf("expected error to contain %q, got %q", tt.errorSubstring, err.Error())
+				require.Error(t, err)
+				if tt.errorSubstring != "" {
+					assert.Contains(t, err.Error(), tt.errorSubstring)
 				}
-				if limiter != nil {
-					t.Errorf("expected limiter to be nil on error, got %v", limiter)
-				}
+				assert.Nil(t, limiter, "expected limiter to be nil on error")
 			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				if limiter == nil {
-					t.Errorf("expected limiter to be non-nil, got nil")
-				}
+				require.NoError(t, err)
+				assert.NotNil(t, limiter, "expected limiter to be non-nil")
 			}
 		})
 	}
@@ -85,95 +51,61 @@ func TestSlidingWindowCounter_Allow(t *testing.T) {
 
 	t.Run("allows requests within limit", func(t *testing.T) {
 		limiter, err := goratelimit.NewSlidingWindowCounter(5, 60)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 5; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
 		}
 	})
 
 	t.Run("rejects requests exceeding limit", func(t *testing.T) {
 		limiter, err := goratelimit.NewSlidingWindowCounter(3, 60)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 3; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
 		}
 
 		res, err := limiter.Allow(ctx, key)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.Allowed {
-			t.Error("4th request should be rejected")
-		}
+		require.NoError(t, err)
+		assert.False(t, res.Allowed, "4th request should be rejected")
 	})
 
 	t.Run("sliding window counter weights previous window", func(t *testing.T) {
 		limiter, err := goratelimit.NewSlidingWindowCounter(10, 2)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 8; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
 		}
 
 		time.Sleep(2100 * time.Millisecond)
 
 		for i := 0; i < 2; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d in new window should be allowed", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d in new window should be allowed", i+1)
 		}
 	})
 
 	t.Run("sliding window counter gradually allows requests as previous window expires", func(t *testing.T) {
 		limiter, err := goratelimit.NewSlidingWindowCounter(10, 2)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 10; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
 		}
 
 		res, _ := limiter.Allow(ctx, key)
-		if res.Allowed {
-			t.Error("11th request should be rejected")
-		}
+		assert.False(t, res.Allowed, "11th request should be rejected")
 
 		time.Sleep(2100 * time.Millisecond)
 		time.Sleep(300 * time.Millisecond)
@@ -187,16 +119,12 @@ func TestSlidingWindowCounter_Allow(t *testing.T) {
 				break
 			}
 		}
-		if allowed == 0 {
-			t.Error("should allow some requests as previous window weight decreases")
-		}
+		assert.Greater(t, allowed, 0, "should allow some requests as previous window weight decreases")
 	})
 
 	t.Run("concurrent access", func(t *testing.T) {
 		limiter, err := goratelimit.NewSlidingWindowCounter(100, 60)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		allowed := make(chan bool, 200)
 		for i := 0; i < 200; i++ {
@@ -213,38 +141,26 @@ func TestSlidingWindowCounter_Allow(t *testing.T) {
 			}
 		}
 
-		if count != 100 {
-			t.Errorf("expected exactly 100 allowed requests, got %d", count)
-		}
+		assert.Equal(t, 100, count, "expected exactly 100 allowed requests")
 	})
 
 	t.Run("window reset behavior", func(t *testing.T) {
 		limiter, err := goratelimit.NewSlidingWindowCounter(5, 1)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 5; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
 		}
 		res, _ := limiter.Allow(ctx, key)
-		if res.Allowed {
-			t.Error("6th request should be rejected")
-		}
+		assert.False(t, res.Allowed, "6th request should be rejected")
 
 		time.Sleep(1100 * time.Millisecond)
 		time.Sleep(200 * time.Millisecond)
 
 		res, _ = limiter.Allow(ctx, key)
-		if !res.Allowed {
-			t.Error("request after previous window weight decreases should be allowed")
-		}
+		assert.True(t, res.Allowed, "request after previous window weight decreases should be allowed")
 	})
 }
 
@@ -256,83 +172,49 @@ func TestSlidingWindowCounter_Allow_Redis(t *testing.T) {
 	}
 
 	limiter, err := goratelimit.NewSlidingWindowCounter(10, 60, goratelimit.WithRedis(client))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
 
 	t.Run("allows requests within limit", func(t *testing.T) {
 		key := fmt.Sprintf("test-counter-user-1-%d", time.Now().UnixNano())
 		res, err := limiter.Allow(ctx, key)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !res.Allowed {
-			t.Error("first request should be allowed")
-		}
-		if res.Remaining < 0 || res.Remaining > res.Limit {
-			t.Errorf("remaining should be between 0 and %d, got %d", res.Limit, res.Remaining)
-		}
-		if res.RetryAfter != 0 {
-			t.Errorf("retryAfter should be 0 when allowed, got %v", res.RetryAfter)
-		}
+		require.NoError(t, err)
+		assert.True(t, res.Allowed, "first request should be allowed")
+		assert.True(t, res.Remaining >= 0 && res.Remaining <= res.Limit, "remaining should be between 0 and %d, got %d", res.Limit, res.Remaining)
+		assert.Zero(t, res.RetryAfter, "retryAfter should be 0 when allowed")
 	})
 
 	t.Run("rejects requests exceeding limit", func(t *testing.T) {
 		key := fmt.Sprintf("test-counter-user-2-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewSlidingWindowCounter(3, 60, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 3; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
 		}
 
 		res, err := limiter.Allow(ctx, key)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.Allowed {
-			t.Error("4th request should be rejected")
-		}
-		if res.Remaining != 0 {
-			t.Errorf("remaining should be 0, got %d", res.Remaining)
-		}
-		if res.RetryAfter < 0 {
-			t.Errorf("retryAfter should be non-negative, got %v", res.RetryAfter)
-		}
-		if res.RetryAfter > 60*time.Second {
-			t.Errorf("retryAfter should not exceed window, got %v", res.RetryAfter)
-		}
+		require.NoError(t, err)
+		assert.False(t, res.Allowed, "4th request should be rejected")
+		assert.Zero(t, res.Remaining, "remaining should be 0")
+		assert.GreaterOrEqual(t, res.RetryAfter, time.Duration(0), "retryAfter should be non-negative")
+		assert.LessOrEqual(t, res.RetryAfter, 60*time.Second, "retryAfter should not exceed window")
 	})
 
 	t.Run("sliding window counter weights previous window", func(t *testing.T) {
 		key := fmt.Sprintf("test-counter-user-3-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewSlidingWindowCounter(10, 2, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 10; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
 		}
 
 		res, _ := limiter.Allow(ctx, key)
-		if res.Allowed {
-			t.Error("11th request should be rejected")
-		}
+		assert.False(t, res.Allowed, "11th request should be rejected")
 
 		time.Sleep(2100 * time.Millisecond)
 
@@ -343,54 +225,38 @@ func TestSlidingWindowCounter_Allow_Redis(t *testing.T) {
 			res, _ := limiter.Allow(ctx, key)
 			allowed = res.Allowed
 		}
-		if !allowed {
-			t.Error("request in new window should eventually be allowed as previous window weight decreases")
-		}
+		assert.True(t, allowed, "request in new window should eventually be allowed as previous window weight decreases")
 	})
 
 	t.Run("tracks separate limits per user", func(t *testing.T) {
 		user1 := fmt.Sprintf("test-counter-user-4-%d", time.Now().UnixNano())
 		user2 := fmt.Sprintf("test-counter-user-5-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewSlidingWindowCounter(2, 60, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		res, _ := limiter.Allow(ctx, user1)
-		if !res.Allowed {
-			t.Error("user1 first request should be allowed")
-		}
+		assert.True(t, res.Allowed, "user1 first request should be allowed")
 		res, _ = limiter.Allow(ctx, user1)
-		if !res.Allowed {
-			t.Error("user1 second request should be allowed")
-		}
+		assert.True(t, res.Allowed, "user1 second request should be allowed")
 
 		res1, _ := limiter.Allow(ctx, user1)
-		if res1.Allowed {
-			t.Error("user1 should be rate limited")
-		}
+		assert.False(t, res1.Allowed, "user1 should be rate limited")
 
 		res2, _ := limiter.Allow(ctx, user2)
-		if !res2.Allowed {
-			t.Error("user2 should not be rate limited")
-		}
+		assert.True(t, res2.Allowed, "user2 should not be rate limited")
 	})
 
 	t.Run("gradual request allowance as window slides", func(t *testing.T) {
 		key := fmt.Sprintf("test-counter-user-6-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewSlidingWindowCounter(10, 2, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 10; i++ {
 			limiter.Allow(ctx, key)
 		}
 
 		res, _ := limiter.Allow(ctx, key)
-		if res.Allowed {
-			t.Error("11th request should be rejected")
-		}
+		assert.False(t, res.Allowed, "11th request should be rejected")
 
 		time.Sleep(2100 * time.Millisecond)
 		time.Sleep(1100 * time.Millisecond)
@@ -404,11 +270,7 @@ func TestSlidingWindowCounter_Allow_Redis(t *testing.T) {
 				break
 			}
 		}
-		if allowedCount == 0 {
-			t.Error("should allow some requests as previous window weight decreases")
-		}
-		if allowedCount < 1 {
-			t.Errorf("should allow at least 1 request, got %d", allowedCount)
-		}
+		assert.Greater(t, allowedCount, 0, "should allow some requests as previous window weight decreases")
+		assert.GreaterOrEqual(t, allowedCount, 1, "should allow at least 1 request")
 	})
 }

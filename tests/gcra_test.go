@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	goratelimit "github.com/krishna-kudari/ratelimit"
 )
@@ -19,73 +21,25 @@ func TestNewGCRA(t *testing.T) {
 		expectError    bool
 		errorSubstring string
 	}{
-		{
-			name:        "valid parameters",
-			rate:        10,
-			burst:       20,
-			expectError: false,
-		},
-		{
-			name:           "zero rate",
-			rate:           0,
-			burst:          20,
-			expectError:    true,
-			errorSubstring: "must be positive",
-		},
-		{
-			name:           "negative rate",
-			rate:           -1,
-			burst:          20,
-			expectError:    true,
-			errorSubstring: "must be positive",
-		},
-		{
-			name:           "zero burst",
-			rate:           10,
-			burst:          0,
-			expectError:    true,
-			errorSubstring: "must be positive",
-		},
-		{
-			name:           "negative burst",
-			rate:           10,
-			burst:          -1,
-			expectError:    true,
-			errorSubstring: "must be positive",
-		},
-		{
-			name:        "burst equals rate",
-			rate:        10,
-			burst:       10,
-			expectError: false,
-		},
-		{
-			name:        "burst greater than rate",
-			rate:        10,
-			burst:       30,
-			expectError: false,
-		},
+		{"valid parameters", 10, 20, false, ""},
+		{"zero rate", 0, 20, true, "must be positive"},
+		{"negative rate", -1, 20, true, "must be positive"},
+		{"zero burst", 10, 0, true, "must be positive"},
+		{"negative burst", 10, -1, true, "must be positive"},
+		{"burst equals rate", 10, 10, false, ""},
+		{"burst greater than rate", 10, 30, false, ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			limiter, err := goratelimit.NewGCRA(tt.rate, tt.burst)
 			if tt.expectError {
-				if err == nil {
-					t.Errorf("expected error but got none")
-				} else if tt.errorSubstring != "" && !contains(err.Error(), tt.errorSubstring) {
-					t.Errorf("expected error to contain %q, got %q", tt.errorSubstring, err.Error())
-				}
-				if limiter != nil {
-					t.Errorf("expected limiter to be nil on error, got %v", limiter)
-				}
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorSubstring)
+				assert.Nil(t, limiter)
 			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				if limiter == nil {
-					t.Errorf("expected limiter to be non-nil, got nil")
-				}
+				require.NoError(t, err)
+				assert.NotNil(t, limiter)
 			}
 		})
 	}
@@ -96,128 +50,80 @@ func TestGCRA_Allow(t *testing.T) {
 	key := "test"
 
 	t.Run("allows requests within burst", func(t *testing.T) {
-		limiter, err := goratelimit.NewGCRA(10, 5) // 10 per second, burst of 5
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		limiter, err := goratelimit.NewGCRA(10, 5)
+		require.NoError(t, err)
 
 		for i := 0; i < 5; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
-			if res.Remaining < 0 {
-				t.Errorf("remaining should be non-negative, got %d", res.Remaining)
-			}
-			if res.RetryAfter != 0 {
-				t.Errorf("retryAfter should be 0 when allowed, got %v", res.RetryAfter)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
+			assert.GreaterOrEqual(t, res.Remaining, int64(0))
+			assert.Equal(t, time.Duration(0), res.RetryAfter, "retryAfter should be 0 when allowed")
 		}
 	})
 
 	t.Run("rejects requests exceeding burst", func(t *testing.T) {
-		limiter, err := goratelimit.NewGCRA(10, 3) // 10 per second, burst of 3
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		limiter, err := goratelimit.NewGCRA(10, 3)
+		require.NoError(t, err)
 
 		for i := 0; i < 3; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
 		}
 
 		res, err := limiter.Allow(ctx, key)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.Allowed {
-			t.Error("4th request should be rejected")
-		}
-		if res.Remaining != 0 {
-			t.Errorf("remaining should be 0 when rejected, got %d", res.Remaining)
-		}
-		if res.RetryAfter <= 0 {
-			t.Errorf("retryAfter should be positive when rejected, got %v", res.RetryAfter)
-		}
+		require.NoError(t, err)
+		assert.False(t, res.Allowed, "4th request should be rejected")
+		assert.Equal(t, int64(0), res.Remaining, "remaining should be 0 when rejected")
+		assert.Greater(t, res.RetryAfter, time.Duration(0), "retryAfter should be positive when rejected")
 	})
 
 	t.Run("allows requests after rate limit period", func(t *testing.T) {
-		limiter, err := goratelimit.NewGCRA(2, 2) // 2 per second, burst of 2
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		limiter, err := goratelimit.NewGCRA(2, 2)
+		require.NoError(t, err)
 
 		res, _ := limiter.Allow(ctx, key)
-		if !res.Allowed {
-			t.Error("first request should be allowed")
-		}
+		assert.True(t, res.Allowed, "first request should be allowed")
 		res, _ = limiter.Allow(ctx, key)
-		if !res.Allowed {
-			t.Error("second request should be allowed")
-		}
+		assert.True(t, res.Allowed, "second request should be allowed")
 		res, _ = limiter.Allow(ctx, key)
-		if res.Allowed {
-			t.Error("third request should be rejected")
-		}
+		assert.False(t, res.Allowed, "third request should be rejected")
 
 		time.Sleep(600 * time.Millisecond)
 
 		res, _ = limiter.Allow(ctx, key)
-		if !res.Allowed {
-			t.Error("request after rate limit period should be allowed")
-		}
+		assert.True(t, res.Allowed, "request after rate limit period should be allowed")
 	})
 
 	t.Run("allows steady rate of requests", func(t *testing.T) {
-		limiter, err := goratelimit.NewGCRA(10, 10) // 10 per second, burst of 10
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		limiter, err := goratelimit.NewGCRA(10, 10)
+		require.NoError(t, err)
 
 		for i := 0; i < 10; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed at steady rate", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed at steady rate", i+1)
 			time.Sleep(100 * time.Millisecond)
 		}
 	})
 
 	t.Run("remaining count decreases as requests are made", func(t *testing.T) {
-		limiter, err := goratelimit.NewGCRA(10, 5) // 10 per second, burst of 5
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		limiter, err := goratelimit.NewGCRA(10, 5)
+		require.NoError(t, err)
 
 		prevRemaining := int64(5)
 		for i := 0; i < 5; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if res.Remaining >= prevRemaining {
-				t.Errorf("remaining should decrease, got %d (previous: %d)", res.Remaining, prevRemaining)
-			}
+			require.NoError(t, err)
+			assert.Less(t, res.Remaining, prevRemaining, "remaining should decrease")
 			prevRemaining = res.Remaining
 		}
 	})
 
 	t.Run("concurrent access", func(t *testing.T) {
-		limiter, err := goratelimit.NewGCRA(100, 50) // 100 per second, burst of 50
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		limiter, err := goratelimit.NewGCRA(100, 50)
+		require.NoError(t, err)
 
 		allowed := make(chan bool, 100)
 		for i := 0; i < 100; i++ {
@@ -234,19 +140,12 @@ func TestGCRA_Allow(t *testing.T) {
 			}
 		}
 
-		if count > 50 {
-			t.Errorf("expected at most 50 allowed requests (burst), got %d", count)
-		}
-		if count < 50 {
-			t.Errorf("expected at least 50 allowed requests (burst), got %d", count)
-		}
+		assert.Equal(t, 50, count, "expected exactly 50 allowed requests (burst)")
 	})
 
 	t.Run("allows burst after waiting", func(t *testing.T) {
-		limiter, err := goratelimit.NewGCRA(5, 3) // 5 per second, burst of 3
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		limiter, err := goratelimit.NewGCRA(5, 3)
+		require.NoError(t, err)
 
 		initialAllowed := 0
 		for i := 0; i < 5; i++ {
@@ -258,9 +157,7 @@ func TestGCRA_Allow(t *testing.T) {
 			}
 		}
 
-		if initialAllowed < 1 {
-			t.Fatalf("expected at least 1 request to be allowed initially, got %d", initialAllowed)
-		}
+		require.GreaterOrEqual(t, initialAllowed, 1, "expected at least 1 request to be allowed initially")
 
 		var retryAfter time.Duration
 		gotRejection := false
@@ -284,31 +181,22 @@ func TestGCRA_Allow(t *testing.T) {
 		}
 
 		res, _ := limiter.Allow(ctx, key)
-		if !res.Allowed {
-			t.Error("request should be allowed after waiting emission interval")
-		}
+		assert.True(t, res.Allowed, "request should be allowed after waiting emission interval")
 	})
 
 	t.Run("retryAfter is calculated correctly", func(t *testing.T) {
-		limiter, err := goratelimit.NewGCRA(10, 2) // 10 per second, burst of 2
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		limiter, err := goratelimit.NewGCRA(10, 2)
+		require.NoError(t, err)
 
 		_, _ = limiter.Allow(ctx, key)
 		_, _ = limiter.Allow(ctx, key)
 
 		res, err := limiter.Allow(ctx, key)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.RetryAfter <= 0 {
-			t.Errorf("retryAfter should be positive, got %v", res.RetryAfter)
-		}
+		require.NoError(t, err)
+		assert.Greater(t, res.RetryAfter, time.Duration(0), "retryAfter should be positive")
 		retrySec := res.RetryAfter.Seconds()
-		if retrySec < 0.1 || retrySec > 2.0 {
-			t.Errorf("retryAfter should be between 0.1 and 2.0 seconds (rounded up), got %v", res.RetryAfter)
-		}
+		assert.GreaterOrEqual(t, retrySec, 0.1, "retryAfter should be at least 0.1 seconds")
+		assert.LessOrEqual(t, retrySec, 2.0, "retryAfter should be at most 2.0 seconds")
 	})
 }
 
@@ -318,30 +206,20 @@ func TestGCRA_Reset(t *testing.T) {
 
 	t.Run("reset clears state and allows burst again", func(t *testing.T) {
 		limiter, err := goratelimit.NewGCRA(10, 3)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 3; i++ {
 			res, _ := limiter.Allow(ctx, key)
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
 		}
 		res, _ := limiter.Allow(ctx, key)
-		if res.Allowed {
-			t.Error("4th request should be rejected")
-		}
+		assert.False(t, res.Allowed, "4th request should be rejected")
 
-		if err := limiter.Reset(ctx, key); err != nil {
-			t.Fatalf("unexpected reset error: %v", err)
-		}
+		require.NoError(t, limiter.Reset(ctx, key))
 
 		for i := 0; i < 3; i++ {
 			res, _ := limiter.Allow(ctx, key)
-			if !res.Allowed {
-				t.Errorf("after reset: request %d should be allowed", i+1)
-			}
+			assert.True(t, res.Allowed, "after reset: request %d should be allowed", i+1)
 		}
 	})
 }
@@ -355,32 +233,20 @@ func TestNewGCRA_Redis(t *testing.T) {
 
 	t.Run("valid parameters", func(t *testing.T) {
 		limiter, err := goratelimit.NewGCRA(10, 20, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if limiter == nil {
-			t.Error("expected limiter to be non-nil")
-		}
+		require.NoError(t, err)
+		assert.NotNil(t, limiter)
 	})
 
 	t.Run("invalid parameters - zero rate", func(t *testing.T) {
 		limiter, err := goratelimit.NewGCRA(0, 20, goratelimit.WithRedis(client))
-		if err == nil {
-			t.Error("expected error for zero rate")
-		}
-		if limiter != nil {
-			t.Error("expected limiter to be nil on error")
-		}
+		require.Error(t, err, "expected error for zero rate")
+		assert.Nil(t, limiter)
 	})
 
 	t.Run("invalid parameters - zero burst", func(t *testing.T) {
 		limiter, err := goratelimit.NewGCRA(10, 0, goratelimit.WithRedis(client))
-		if err == nil {
-			t.Error("expected error for zero burst")
-		}
-		if limiter != nil {
-			t.Error("expected limiter to be nil on error")
-		}
+		require.Error(t, err, "expected error for zero burst")
+		assert.Nil(t, limiter)
 	})
 }
 
@@ -392,125 +258,80 @@ func TestGCRA_Redis_Allow(t *testing.T) {
 	}
 
 	limiter, err := goratelimit.NewGCRA(10, 20, goratelimit.WithRedis(client))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
 
 	t.Run("allows requests within burst", func(t *testing.T) {
 		key := fmt.Sprintf("test-gcra-user-1-%d", time.Now().UnixNano())
 		res, err := limiter.Allow(ctx, key)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !res.Allowed {
-			t.Error("first request should be allowed")
-		}
-		if res.Remaining < 0 || res.Remaining > res.Limit {
-			t.Errorf("remaining should be between 0 and %d, got %d", res.Limit, res.Remaining)
-		}
-		if res.RetryAfter != 0 {
-			t.Errorf("retryAfter should be 0 when allowed, got %v", res.RetryAfter)
-		}
+		require.NoError(t, err)
+		assert.True(t, res.Allowed, "first request should be allowed")
+		assert.GreaterOrEqual(t, res.Remaining, int64(0))
+		assert.LessOrEqual(t, res.Remaining, res.Limit)
+		assert.Equal(t, time.Duration(0), res.RetryAfter, "retryAfter should be 0 when allowed")
 	})
 
 	t.Run("rejects requests exceeding burst", func(t *testing.T) {
 		key := fmt.Sprintf("test-gcra-user-2-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewGCRA(10, 3, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 3; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
 		}
 
 		res, err := limiter.Allow(ctx, key)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.Allowed {
-			t.Error("4th request should be rejected")
-		}
-		if res.Remaining != 0 {
-			t.Errorf("remaining should be 0, got %d", res.Remaining)
-		}
-		if res.RetryAfter <= 0 {
-			t.Errorf("retryAfter should be positive, got %v", res.RetryAfter)
-		}
+		require.NoError(t, err)
+		assert.False(t, res.Allowed, "4th request should be rejected")
+		assert.Equal(t, int64(0), res.Remaining, "remaining should be 0")
+		assert.Greater(t, res.RetryAfter, time.Duration(0), "retryAfter should be positive")
 	})
 
 	t.Run("allows requests after rate limit period", func(t *testing.T) {
 		key := fmt.Sprintf("test-gcra-user-3-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewGCRA(2, 2, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		limiter.Allow(ctx, key)
 		limiter.Allow(ctx, key)
 
 		res, _ := limiter.Allow(ctx, key)
-		if res.Allowed {
-			t.Error("third request should be rejected")
-		}
+		assert.False(t, res.Allowed, "third request should be rejected")
 
 		time.Sleep(600 * time.Millisecond)
 
 		res, _ = limiter.Allow(ctx, key)
-		if !res.Allowed {
-			t.Error("request after rate limit period should be allowed")
-		}
+		assert.True(t, res.Allowed, "request after rate limit period should be allowed")
 	})
 
 	t.Run("tracks separate limits per user", func(t *testing.T) {
 		user1 := fmt.Sprintf("test-gcra-user-4-%d", time.Now().UnixNano())
 		user2 := fmt.Sprintf("test-gcra-user-5-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewGCRA(10, 2, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		res, _ := limiter.Allow(ctx, user1)
-		if !res.Allowed {
-			t.Error("user1 first request should be allowed")
-		}
+		assert.True(t, res.Allowed, "user1 first request should be allowed")
 		res, _ = limiter.Allow(ctx, user1)
-		if !res.Allowed {
-			t.Error("user1 second request should be allowed")
-		}
+		assert.True(t, res.Allowed, "user1 second request should be allowed")
 
 		res1, _ := limiter.Allow(ctx, user1)
-		if res1.Allowed {
-			t.Error("user1 should be rate limited")
-		}
+		assert.False(t, res1.Allowed, "user1 should be rate limited")
 
 		res2, _ := limiter.Allow(ctx, user2)
-		if !res2.Allowed {
-			t.Error("user2 should not be rate limited")
-		}
+		assert.True(t, res2.Allowed, "user2 should not be rate limited")
 	})
 
 	t.Run("allows steady rate of requests", func(t *testing.T) {
 		key := fmt.Sprintf("test-gcra-user-6-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewGCRA(10, 10, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 10; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed at steady rate", i+1)
-			}
+			require.NoError(t, err)
+			assert.True(t, res.Allowed, "request %d should be allowed at steady rate", i+1)
 			time.Sleep(100 * time.Millisecond)
 		}
 	})
@@ -518,19 +339,13 @@ func TestGCRA_Redis_Allow(t *testing.T) {
 	t.Run("remaining count decreases as requests are made", func(t *testing.T) {
 		key := fmt.Sprintf("test-gcra-user-7-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewGCRA(10, 5, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		prevRemaining := int64(5)
 		for i := 0; i < 5; i++ {
 			res, err := limiter.Allow(ctx, key)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if res.Remaining >= prevRemaining {
-				t.Errorf("remaining should decrease, got %d (previous: %d)", res.Remaining, prevRemaining)
-			}
+			require.NoError(t, err)
+			assert.Less(t, res.Remaining, prevRemaining, "remaining should decrease")
 			prevRemaining = res.Remaining
 		}
 	})
@@ -538,47 +353,33 @@ func TestGCRA_Redis_Allow(t *testing.T) {
 	t.Run("allows burst after waiting", func(t *testing.T) {
 		key := fmt.Sprintf("test-gcra-user-8-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewGCRA(5, 3, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		limiter.Allow(ctx, key)
 		limiter.Allow(ctx, key)
 		limiter.Allow(ctx, key)
 
 		res, _ := limiter.Allow(ctx, key)
-		if res.Allowed {
-			t.Error("request should be rejected after burst")
-		}
+		assert.False(t, res.Allowed, "request should be rejected after burst")
 
 		time.Sleep(250 * time.Millisecond)
 
 		res, _ = limiter.Allow(ctx, key)
-		if !res.Allowed {
-			t.Error("request should be allowed after waiting emission interval")
-		}
+		assert.True(t, res.Allowed, "request should be allowed after waiting emission interval")
 	})
 
 	t.Run("retryAfter is calculated correctly", func(t *testing.T) {
 		key := fmt.Sprintf("test-gcra-user-9-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewGCRA(10, 2, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		limiter.Allow(ctx, key)
 		limiter.Allow(ctx, key)
 
 		res, err := limiter.Allow(ctx, key)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.RetryAfter <= 0 {
-			t.Errorf("retryAfter should be positive, got %v", res.RetryAfter)
-		}
-		if res.RetryAfter > time.Second {
-			t.Errorf("retryAfter should be approximately 1 second (rounded up), got %v", res.RetryAfter)
-		}
+		require.NoError(t, err)
+		assert.Greater(t, res.RetryAfter, time.Duration(0), "retryAfter should be positive")
+		assert.LessOrEqual(t, res.RetryAfter, time.Second, "retryAfter should be approximately 1 second (rounded up)")
 	})
 
 	t.Run("fail open on Redis error", func(t *testing.T) {
@@ -596,30 +397,20 @@ func TestGCRA_Redis_Reset(t *testing.T) {
 	t.Run("reset clears state and allows burst again", func(t *testing.T) {
 		key := fmt.Sprintf("test-gcra-reset-%d", time.Now().UnixNano())
 		limiter, err := goratelimit.NewGCRA(10, 3, goratelimit.WithRedis(client))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		require.NoError(t, err)
 
 		for i := 0; i < 3; i++ {
 			res, _ := limiter.Allow(ctx, key)
-			if !res.Allowed {
-				t.Errorf("request %d should be allowed", i+1)
-			}
+			assert.True(t, res.Allowed, "request %d should be allowed", i+1)
 		}
 		res, _ := limiter.Allow(ctx, key)
-		if res.Allowed {
-			t.Error("4th request should be rejected")
-		}
+		assert.False(t, res.Allowed, "4th request should be rejected")
 
-		if err := limiter.Reset(ctx, key); err != nil {
-			t.Fatalf("unexpected reset error: %v", err)
-		}
+		require.NoError(t, limiter.Reset(ctx, key))
 
 		for i := 0; i < 3; i++ {
 			res, _ := limiter.Allow(ctx, key)
-			if !res.Allowed {
-				t.Errorf("after reset: request %d should be allowed", i+1)
-			}
+			assert.True(t, res.Allowed, "after reset: request %d should be allowed", i+1)
 		}
 	})
 }

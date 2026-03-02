@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	goratelimit "github.com/krishna-kudari/ratelimit"
 )
 
@@ -62,23 +65,17 @@ func TestLocalCache_CacheHit(t *testing.T) {
 
 	// First call — cache miss, hits backend
 	r, err := lc.Allow(ctx, "k1")
-	if err != nil || !r.Allowed {
-		t.Fatalf("expected allowed, got err=%v allowed=%v", err, r.Allowed)
-	}
-	if mock.getCalls() != 1 {
-		t.Fatalf("expected 1 backend call, got %d", mock.getCalls())
-	}
+	require.NoError(t, err)
+	require.True(t, r.Allowed, "expected allowed")
+	require.Equal(t, 1, mock.getCalls(), "expected 1 backend call")
 
 	// Next calls should be served from cache
 	for i := 0; i < 5; i++ {
 		r, err = lc.Allow(ctx, "k1")
-		if err != nil || !r.Allowed {
-			t.Fatalf("call %d: expected allowed, got err=%v allowed=%v", i, err, r.Allowed)
-		}
+		require.NoError(t, err)
+		require.True(t, r.Allowed, "call %d: expected allowed", i)
 	}
-	if mock.getCalls() != 1 {
-		t.Fatalf("expected still 1 backend call after cache hits, got %d", mock.getCalls())
-	}
+	require.Equal(t, 1, mock.getCalls(), "expected still 1 backend call after cache hits")
 }
 
 func TestLocalCache_RemainingDecreases(t *testing.T) {
@@ -98,24 +95,14 @@ func TestLocalCache_RemainingDecreases(t *testing.T) {
 
 	ctx := context.Background()
 
-	// First call is cache miss → backend already counted this request,
-	// returns Remaining=5 as-is. localUsed starts at 0.
 	r, _ := lc.Allow(ctx, "k1")
-	if r.Remaining != 5 {
-		t.Fatalf("expected remaining=5 from backend, got %d", r.Remaining)
-	}
+	require.Equal(t, int64(5), r.Remaining, "expected remaining=5 from backend")
 
-	// Second call: cache hit → localUsed=1, remaining = 5-1 = 4
 	r, _ = lc.Allow(ctx, "k1")
-	if r.Remaining != 4 {
-		t.Fatalf("expected remaining=4, got %d", r.Remaining)
-	}
+	require.Equal(t, int64(4), r.Remaining, "expected remaining=4")
 
-	// Third call: cache hit → localUsed=2, remaining = 5-2 = 3
 	r, _ = lc.Allow(ctx, "k1")
-	if r.Remaining != 3 {
-		t.Fatalf("expected remaining=3, got %d", r.Remaining)
-	}
+	require.Equal(t, int64(3), r.Remaining, "expected remaining=3")
 }
 
 func TestLocalCache_ExhaustedLocalQuota_SyncsBackend(t *testing.T) {
@@ -139,27 +126,19 @@ func TestLocalCache_ExhaustedLocalQuota_SyncsBackend(t *testing.T) {
 
 	// Call 1: cache miss → backend (call 1), returns remaining=2, localUsed=0
 	_, _ = lc.Allow(ctx, "k1")
-	if callCount.Load() != 1 {
-		t.Fatalf("expected 1 backend call, got %d", callCount.Load())
-	}
+	require.Equal(t, int64(1), callCount.Load(), "expected 1 backend call")
 
 	// Call 2: cache hit → remaining=2, localUsed becomes 1, 2-0>=1 true → serves locally
 	_, _ = lc.Allow(ctx, "k1")
-	if callCount.Load() != 1 {
-		t.Fatalf("expected still 1 backend call, got %d", callCount.Load())
-	}
+	require.Equal(t, int64(1), callCount.Load(), "expected still 1 backend call")
 
 	// Call 3: cache hit → remaining=2, localUsed=1, 2-1>=1 true → serves locally
 	_, _ = lc.Allow(ctx, "k1")
-	if callCount.Load() != 1 {
-		t.Fatalf("expected still 1 backend call after call 3, got %d", callCount.Load())
-	}
+	require.Equal(t, int64(1), callCount.Load(), "expected still 1 backend call after call 3")
 
 	// Call 4: cache hit → remaining=2, localUsed=2, 2-2=0 < 1 → exhausted, syncs backend (call 2)
 	_, _ = lc.Allow(ctx, "k1")
-	if callCount.Load() != 2 {
-		t.Fatalf("expected 2 backend calls after local exhaustion, got %d", callCount.Load())
-	}
+	require.Equal(t, int64(2), callCount.Load(), "expected 2 backend calls after local exhaustion")
 }
 
 func TestLocalCache_DeniedCached(t *testing.T) {
@@ -182,20 +161,14 @@ func TestLocalCache_DeniedCached(t *testing.T) {
 
 	// First call — backend returns denial
 	r, _ := lc.Allow(ctx, "k1")
-	if r.Allowed {
-		t.Fatal("expected denied")
-	}
+	require.False(t, r.Allowed, "expected denied")
 
 	// Subsequent calls served from cache (denial cached)
 	for i := 0; i < 5; i++ {
 		r, _ = lc.Allow(ctx, "k1")
-		if r.Allowed {
-			t.Fatal("expected cached denial")
-		}
+		require.False(t, r.Allowed, "expected cached denial")
 	}
-	if mock.getCalls() != 1 {
-		t.Fatalf("expected 1 backend call for cached denial, got %d", mock.getCalls())
-	}
+	require.Equal(t, 1, mock.getCalls(), "expected 1 backend call for cached denial")
 }
 
 func TestLocalCache_TTLExpiry(t *testing.T) {
@@ -216,23 +189,17 @@ func TestLocalCache_TTLExpiry(t *testing.T) {
 	ctx := context.Background()
 
 	_, _ = lc.Allow(ctx, "k1")
-	if mock.getCalls() != 1 {
-		t.Fatal("expected 1 call")
-	}
+	require.Equal(t, 1, mock.getCalls(), "expected 1 call")
 
 	// Within TTL — should still be cached
 	_, _ = lc.Allow(ctx, "k1")
-	if mock.getCalls() != 1 {
-		t.Fatal("expected still 1 call within TTL")
-	}
+	require.Equal(t, 1, mock.getCalls(), "expected still 1 call within TTL")
 
 	// Wait for TTL to expire
 	time.Sleep(60 * time.Millisecond)
 
 	_, _ = lc.Allow(ctx, "k1")
-	if mock.getCalls() != 2 {
-		t.Fatalf("expected 2 calls after TTL expiry, got %d", mock.getCalls())
-	}
+	require.Equal(t, 2, mock.getCalls(), "expected 2 calls after TTL expiry")
 }
 
 func TestLocalCache_DenialTTL_UsesRetryAfter(t *testing.T) {
@@ -257,16 +224,12 @@ func TestLocalCache_DenialTTL_UsesRetryAfter(t *testing.T) {
 	ctx := context.Background()
 
 	lc.Allow(ctx, "k1")
-	if callCount != 1 {
-		t.Fatal("expected 1 call")
-	}
+	require.Equal(t, 1, callCount, "expected 1 call")
 
 	time.Sleep(40 * time.Millisecond)
 
 	lc.Allow(ctx, "k1")
-	if callCount != 2 {
-		t.Fatalf("expected 2 calls after retryAfter expiry, got %d", callCount)
-	}
+	require.Equal(t, 2, callCount, "expected 2 calls after retryAfter expiry")
 }
 
 func TestLocalCache_AllowN(t *testing.T) {
@@ -288,27 +251,22 @@ func TestLocalCache_AllowN(t *testing.T) {
 
 	// AllowN(5): cache miss → backend (call 1), returns remaining=10
 	r, _ := lc.AllowN(ctx, "k1", 5)
-	if !r.Allowed || r.Remaining != 10 {
-		t.Fatalf("expected allowed with remaining=10 from backend, got allowed=%v remaining=%d", r.Allowed, r.Remaining)
-	}
+	require.True(t, r.Allowed, "expected allowed")
+	require.Equal(t, int64(10), r.Remaining, "expected remaining=10 from backend")
 
 	// AllowN(5): cache hit → localUsed=5, remaining=10-5=5
 	r, _ = lc.AllowN(ctx, "k1", 5)
-	if !r.Allowed || r.Remaining != 5 {
-		t.Fatalf("expected allowed with remaining=5, got allowed=%v remaining=%d", r.Allowed, r.Remaining)
-	}
+	require.True(t, r.Allowed, "expected allowed")
+	require.Equal(t, int64(5), r.Remaining, "expected remaining=5")
 
 	// AllowN(5): cache hit → localUsed=10, remaining=10-10=0
 	r, _ = lc.AllowN(ctx, "k1", 5)
-	if !r.Allowed || r.Remaining != 0 {
-		t.Fatalf("expected allowed with remaining=0, got allowed=%v remaining=%d", r.Allowed, r.Remaining)
-	}
+	require.True(t, r.Allowed, "expected allowed")
+	require.Equal(t, int64(0), r.Remaining, "expected remaining=0")
 
 	// AllowN(1): local quota exhausted (10-10=0 < 1) → syncs backend (call 2)
 	_, _ = lc.AllowN(ctx, "k1", 1)
-	if mock.getCalls() != 2 {
-		t.Fatalf("expected 2 backend calls, got %d", mock.getCalls())
-	}
+	require.Equal(t, 2, mock.getCalls(), "expected 2 backend calls")
 }
 
 func TestLocalCache_Reset(t *testing.T) {
@@ -330,20 +288,15 @@ func TestLocalCache_Reset(t *testing.T) {
 
 	// Populate cache
 	_, _ = lc.Allow(ctx, "k1")
-	if mock.getCalls() != 1 {
-		t.Fatal("expected 1 call")
-	}
+	require.Equal(t, 1, mock.getCalls(), "expected 1 call")
 
 	// Reset evicts from cache
-	if err := lc.Reset(ctx, "k1"); err != nil {
-		t.Fatal(err)
-	}
+	err := lc.Reset(ctx, "k1")
+	require.NoError(t, err)
 
 	// Next call must hit backend (cache was evicted)
 	_, _ = lc.Allow(ctx, "k1")
-	if mock.getCalls() != 2 {
-		t.Fatalf("expected 2 backend calls after reset, got %d", mock.getCalls())
-	}
+	require.Equal(t, 2, mock.getCalls(), "expected 2 backend calls after reset")
 }
 
 func TestLocalCache_MultipleKeys(t *testing.T) {
@@ -367,17 +320,13 @@ func TestLocalCache_MultipleKeys(t *testing.T) {
 	lc.Allow(ctx, "user:2")
 	lc.Allow(ctx, "user:3")
 
-	if mock.getCalls() != 3 {
-		t.Fatalf("expected 3 backend calls for 3 different keys, got %d", mock.getCalls())
-	}
+	require.Equal(t, 3, mock.getCalls(), "expected 3 backend calls for 3 different keys")
 
 	// Subsequent calls on same keys → cache hits
 	lc.Allow(ctx, "user:1")
 	lc.Allow(ctx, "user:2")
 	lc.Allow(ctx, "user:3")
-	if mock.getCalls() != 3 {
-		t.Fatalf("expected still 3 backend calls after cache hits, got %d", mock.getCalls())
-	}
+	require.Equal(t, 3, mock.getCalls(), "expected still 3 backend calls after cache hits")
 }
 
 func TestLocalCache_MaxKeys(t *testing.T) {
@@ -405,16 +354,12 @@ func TestLocalCache_MaxKeys(t *testing.T) {
 	lc.Allow(ctx, "k3")
 
 	stats := lc.Stats()
-	if stats.Keys != 3 {
-		t.Fatalf("expected 3 keys, got %d", stats.Keys)
-	}
+	require.Equal(t, 3, stats.Keys, "expected 3 keys")
 
 	// Adding 4th should evict oldest (k1)
 	lc.Allow(ctx, "k4")
 	stats = lc.Stats()
-	if stats.Keys != 3 {
-		t.Fatalf("expected 3 keys after eviction, got %d", stats.Keys)
-	}
+	require.Equal(t, 3, stats.Keys, "expected 3 keys after eviction")
 }
 
 func TestLocalCache_ConcurrentAccess(t *testing.T) {
@@ -440,18 +385,14 @@ func TestLocalCache_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
 				_, err := lc.Allow(ctx, "concurrent-key")
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
+				assert.NoError(t, err)
 			}
 		}()
 	}
 	wg.Wait()
 
 	// Should have far fewer than 10000 backend calls due to caching
-	if mock.getCalls() > 100 {
-		t.Fatalf("expected significantly fewer backend calls with caching, got %d", mock.getCalls())
-	}
+	require.LessOrEqual(t, mock.getCalls(), 100, "expected significantly fewer backend calls with caching")
 }
 
 func TestLocalCache_Stats(t *testing.T) {
@@ -472,15 +413,11 @@ func TestLocalCache_Stats(t *testing.T) {
 	ctx := context.Background()
 
 	stats := lc.Stats()
-	if stats.Keys != 0 {
-		t.Fatalf("expected 0 keys initially, got %d", stats.Keys)
-	}
+	require.Equal(t, 0, stats.Keys, "expected 0 keys initially")
 
 	_, _ = lc.Allow(ctx, "k1")
 	_, _ = lc.Allow(ctx, "k2")
 
 	stats = lc.Stats()
-	if stats.Keys != 2 {
-		t.Fatalf("expected 2 keys, got %d", stats.Keys)
-	}
+	require.Equal(t, 2, stats.Keys, "expected 2 keys")
 }
