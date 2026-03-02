@@ -14,17 +14,17 @@
 //
 // # Quick Start
 //
-//	limiter, err := goratelimit.NewTokenBucket(100, 10)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-//
-//	result, err := limiter.Allow(ctx, "user:123")
+//	limiter, err := goratelimit.New("", goratelimit.PerMinute(100))
+//	result, _ := limiter.Allow(ctx, "user:123")
 //	if result.Allowed {
 //	    // serve request
 //	}
 //
 // # With Redis
+//
+//	limiter, _ := goratelimit.New("redis://localhost:6379", goratelimit.PerMinute(100))
+//
+// # Algorithm-Specific Constructors
 //
 //	limiter, _ := goratelimit.NewTokenBucket(100, 10,
 //	    goratelimit.WithRedis(redisClient),

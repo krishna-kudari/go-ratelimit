@@ -8,6 +8,20 @@ import (
 	goratelimit "github.com/krishna-kudari/ratelimit"
 )
 
+func ExampleNew() {
+	limiter, _ := goratelimit.New("", goratelimit.PerMinute(100))
+	result, _ := limiter.Allow(context.Background(), "user:123")
+	fmt.Printf("allowed=%v remaining=%d limit=%d\n", result.Allowed, result.Remaining, result.Limit)
+	// Output: allowed=true remaining=99 limit=100
+}
+
+func ExampleNewInMemory() {
+	limiter, _ := goratelimit.NewInMemory(goratelimit.PerHour(500))
+	result, _ := limiter.Allow(context.Background(), "user:123")
+	fmt.Printf("allowed=%v limit=%d\n", result.Allowed, result.Limit)
+	// Output: allowed=true limit=500
+}
+
 func ExampleNewFixedWindow() {
 	limiter, _ := goratelimit.NewFixedWindow(10, 60)
 	result, _ := limiter.Allow(context.Background(), "user:123")
