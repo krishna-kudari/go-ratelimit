@@ -237,7 +237,7 @@ func defaultDeniedHandler(message string, statusCode int) DeniedHandler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(statusCode)
-		json.NewEncoder(w).Encode(body)
+		_ = json.NewEncoder(w).Encode(body)
 	}
 }
 
