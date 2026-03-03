@@ -18,7 +18,8 @@ import (
 // Pass WithRedis for distributed mode; omit for in-memory.
 func NewSlidingWindow(maxRequests, windowSeconds int64, opts ...Option) (Limiter, error) {
 	if maxRequests <= 0 || windowSeconds <= 0 {
-		return nil, fmt.Errorf("goratelimit: maxRequests and windowSeconds must be positive")
+		return nil, validationErr("maxRequests and windowSeconds must be positive",
+			"Use positive integers, e.g. NewSlidingWindow(10, 60).")
 	}
 	o := applyOptions(opts)
 
@@ -200,5 +201,5 @@ func (s *slidingWindowRedis) failResult(err error, limit int64) (*Result, error)
 	if s.opts.FailOpen {
 		return &Result{Allowed: true, Remaining: limit - 1, Limit: limit}, nil
 	}
-	return &Result{Allowed: false, Remaining: 0, Limit: limit}, fmt.Errorf("goratelimit: redis error: %w", err)
+	return &Result{Allowed: false, Remaining: 0, Limit: limit}, redisErr(err, s.opts)
 }

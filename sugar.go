@@ -37,13 +37,14 @@ func PerHour(n int64) Rate {
 //	limiter, err := goratelimit.New("redis://localhost:6379", goratelimit.PerMinute(100))
 func New(redisURL string, rate Rate, opts ...Option) (Limiter, error) {
 	if rate.maxRequests <= 0 || rate.windowSeconds <= 0 {
-		return nil, fmt.Errorf("goratelimit: rate must have positive limit and window")
+		return nil, validationErr("rate must have positive limit and window",
+			"Use PerSecond, PerMinute, or PerHour with a positive number, e.g. New(redisURL, goratelimit.PerMinute(100)).")
 	}
 
 	if redisURL != "" {
 		ropts, err := redis.ParseURL(redisURL)
 		if err != nil {
-			return nil, fmt.Errorf("goratelimit: invalid redis URL %q: %w", redisURL, err)
+			return nil, fmt.Errorf("goratelimit: invalid redis URL %q. Use a valid URL e.g. redis://localhost:6379/0. See %s#New: %w", redisURL, docBase, err)
 		}
 		client := redis.NewClient(ropts)
 		opts = append([]Option{WithRedis(client)}, opts...)

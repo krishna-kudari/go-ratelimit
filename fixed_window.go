@@ -2,7 +2,6 @@ package goratelimit
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -15,7 +14,8 @@ import (
 // Pass WithRedis for distributed mode; omit for in-memory.
 func NewFixedWindow(maxRequests, windowSeconds int64, opts ...Option) (Limiter, error) {
 	if maxRequests <= 0 || windowSeconds <= 0 {
-		return nil, fmt.Errorf("goratelimit: maxRequests and windowSeconds must be positive")
+		return nil, validationErr("maxRequests and windowSeconds must be positive",
+			"Use positive integers, e.g. NewFixedWindow(10, 60).")
 	}
 	o := applyOptions(opts)
 
@@ -168,7 +168,7 @@ func (f *fixedWindowRedis) AllowN(ctx context.Context, key string, n int) (*Resu
 		if f.opts.FailOpen {
 			return &Result{Allowed: true, Remaining: maxReq - 1, Limit: maxReq}, nil
 		}
-		return &Result{Allowed: false, Remaining: 0, Limit: maxReq}, fmt.Errorf("goratelimit: redis error: %w", err)
+		return &Result{Allowed: false, Remaining: 0, Limit: maxReq}, redisErr(err, f.opts)
 	}
 
 	allowed := result[0] == 1

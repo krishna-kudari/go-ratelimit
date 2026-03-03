@@ -2,7 +2,6 @@ package goratelimit
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -16,7 +15,8 @@ import (
 // Pass WithRedis for distributed mode; omit for in-memory.
 func NewTokenBucket(capacity, refillRate int64, opts ...Option) (Limiter, error) {
 	if capacity <= 0 || refillRate <= 0 {
-		return nil, fmt.Errorf("goratelimit: capacity and refillRate must be positive")
+		return nil, validationErr("capacity and refillRate must be positive",
+			"Use positive integers, e.g. NewTokenBucket(10, 5).")
 	}
 	o := applyOptions(opts)
 
@@ -179,7 +179,7 @@ func (t *tokenBucketRedis) AllowN(ctx context.Context, key string, n int) (*Resu
 		if t.opts.FailOpen {
 			return &Result{Allowed: true, Remaining: cap - 1, Limit: cap}, nil
 		}
-		return &Result{Allowed: false, Remaining: 0, Limit: cap}, fmt.Errorf("goratelimit: redis error: %w", err)
+		return &Result{Allowed: false, Remaining: 0, Limit: cap}, redisErr(err, t.opts)
 	}
 
 	allowed := result[0] == 1

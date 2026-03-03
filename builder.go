@@ -2,7 +2,6 @@ package goratelimit
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -209,6 +208,7 @@ func (b *Builder) Build() (Limiter, error) {
 	case algoCMS:
 		return NewCMS(b.cmsLimit, b.cmsWindowSecs, b.cmsEpsilon, b.cmsDelta, b.opts...)
 	default:
-		return nil, fmt.Errorf("goratelimit: no algorithm selected; call FixedWindow, SlidingWindow, TokenBucket, LeakyBucket, GCRA, or CMS before Build")
+		return nil, validationErr("no algorithm selected",
+			"Call one of FixedWindow, SlidingWindow, SlidingWindowCounter, TokenBucket, LeakyBucket, GCRA, or CMS before Build().")
 	}
 }

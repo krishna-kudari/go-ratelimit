@@ -2,7 +2,6 @@ package goratelimit
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -91,13 +90,16 @@ type cmsLimiter struct {
 // Example: ε=0.01, δ=0.001 → ~30 KB fixed.
 func NewCMS(limit, windowSeconds int64, epsilon, delta float64, opts ...Option) (Limiter, error) {
 	if limit <= 0 || windowSeconds <= 0 {
-		return nil, fmt.Errorf("goratelimit: limit and windowSeconds must be positive")
+		return nil, validationErr("limit and windowSeconds must be positive",
+			"Use positive integers, e.g. NewCMS(100, 60, 0.01, 0.001).")
 	}
 	if epsilon <= 0 || epsilon >= 1 {
-		return nil, fmt.Errorf("goratelimit: epsilon must be in (0, 1)")
+		return nil, validationErr("epsilon must be in (0, 1)",
+			"Use a value like 0.01 for 1%% error. See "+docBase+"#NewCMS.")
 	}
 	if delta <= 0 || delta >= 1 {
-		return nil, fmt.Errorf("goratelimit: delta must be in (0, 1)")
+		return nil, validationErr("delta must be in (0, 1)",
+			"Use a value like 0.001 for failure probability. See "+docBase+"#NewCMS.")
 	}
 
 	o := applyOptions(opts)

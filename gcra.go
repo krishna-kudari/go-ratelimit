@@ -2,7 +2,6 @@ package goratelimit
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -15,7 +14,8 @@ import (
 // Pass WithRedis for distributed mode; omit for in-memory.
 func NewGCRA(rate, burst int64, opts ...Option) (Limiter, error) {
 	if rate <= 0 || burst <= 0 {
-		return nil, fmt.Errorf("goratelimit: rate and burst must be positive")
+		return nil, validationErr("rate and burst must be positive",
+			"Use positive integers, e.g. NewGCRA(10, 5).")
 	}
 	o := applyOptions(opts)
 	emissionInterval := 1.0 / float64(rate)
@@ -164,7 +164,7 @@ func (g *gcraRedis) AllowN(ctx context.Context, key string, n int) (*Result, err
 		if g.opts.FailOpen {
 			return &Result{Allowed: true, Remaining: burst - 1, Limit: burst}, nil
 		}
-		return &Result{Allowed: false, Remaining: 0, Limit: burst}, fmt.Errorf("goratelimit: redis error: %w", err)
+		return &Result{Allowed: false, Remaining: 0, Limit: burst}, redisErr(err, g.opts)
 	}
 
 	allowed := result[0] == 1
