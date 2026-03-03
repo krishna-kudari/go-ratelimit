@@ -24,14 +24,14 @@ func NewSlidingWindowCounter(maxRequests, windowSeconds int64, opts ...Option) (
 	o := applyOptions(opts)
 
 	if o.RedisClient != nil {
-		return wrapDryRun(&slidingWindowCounterRedis{
+		return wrapOptions(&slidingWindowCounterRedis{
 			redis:         o.RedisClient,
 			maxRequests:   maxRequests,
 			windowSeconds: windowSeconds,
 			opts:          o,
 		}, o), nil
 	}
-	return wrapDryRun(&slidingWindowCounterMemory{
+	return wrapOptions(&slidingWindowCounterMemory{
 		states:        make(map[string]*slidingWindowCounterState),
 		maxRequests:   maxRequests,
 		windowSeconds: windowSeconds,

@@ -188,6 +188,13 @@ func (b *Builder) LimitFunc(fn func(ctx context.Context, key string) int64) *Bui
 	return b
 }
 
+// OnLimitExceeded sets a callback invoked when a request is denied due to rate limit.
+// Use for alerting, analytics, or logging. Not called on backend errors or when DryRun is true.
+func (b *Builder) OnLimitExceeded(fn func(ctx context.Context, key string, result *Result)) *Builder {
+	b.opts = append(b.opts, WithOnLimitExceeded(fn))
+	return b
+}
+
 // ─── Build ───────────────────────────────────────────────────────────────────
 
 // Build validates the configuration and returns the configured Limiter.

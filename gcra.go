@@ -22,7 +22,7 @@ func NewGCRA(rate, burst int64, opts ...Option) (Limiter, error) {
 	burstAllowance := float64(burst-1) * emissionInterval
 
 	if o.RedisClient != nil {
-		return wrapDryRun(&gcraRedis{
+		return wrapOptions(&gcraRedis{
 			redis:            o.RedisClient,
 			emissionInterval: emissionInterval,
 			burstAllowance:   burstAllowance,
@@ -30,7 +30,7 @@ func NewGCRA(rate, burst int64, opts ...Option) (Limiter, error) {
 			opts:             o,
 		}, o), nil
 	}
-	return wrapDryRun(&gcraMemory{
+	return wrapOptions(&gcraMemory{
 		states:           make(map[string]*gcraState),
 		emissionInterval: emissionInterval,
 		burstAllowance:   burstAllowance,

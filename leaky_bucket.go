@@ -37,7 +37,7 @@ func NewLeakyBucket(capacity, leakRate int64, mode LeakyBucketMode, opts ...Opti
 	o := applyOptions(opts)
 
 	if o.RedisClient != nil {
-		return wrapDryRun(&leakyBucketRedis{
+		return wrapOptions(&leakyBucketRedis{
 			redis:    o.RedisClient,
 			capacity: capacity,
 			leakRate: leakRate,
@@ -45,7 +45,7 @@ func NewLeakyBucket(capacity, leakRate int64, mode LeakyBucketMode, opts ...Opti
 			opts:     o,
 		}, o), nil
 	}
-	return wrapDryRun(&leakyBucketMemory{
+	return wrapOptions(&leakyBucketMemory{
 		states:   make(map[string]*leakyBucketState),
 		capacity: float64(capacity),
 		leakRate: float64(leakRate),

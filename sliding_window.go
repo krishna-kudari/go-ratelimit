@@ -24,14 +24,14 @@ func NewSlidingWindow(maxRequests, windowSeconds int64, opts ...Option) (Limiter
 	o := applyOptions(opts)
 
 	if o.RedisClient != nil {
-		return wrapDryRun(&slidingWindowRedis{
+		return wrapOptions(&slidingWindowRedis{
 			redis:         o.RedisClient,
 			maxRequests:   maxRequests,
 			windowSeconds: windowSeconds,
 			opts:          o,
 		}, o), nil
 	}
-	return wrapDryRun(&slidingWindowMemory{
+	return wrapOptions(&slidingWindowMemory{
 		states:        make(map[string]*slidingWindowState),
 		maxRequests:   maxRequests,
 		windowSeconds: windowSeconds,

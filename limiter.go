@@ -84,6 +84,10 @@ type Options struct {
 	// DryRunLogFunc is called when DryRun is true and a request would have been
 	// denied. If nil, log.Printf("[DRYRUN] would deny key=...") is used.
 	DryRunLogFunc func(key string, result *Result)
+
+	// OnLimitExceeded is called when a request is denied due to rate limit.
+	// Use for alerting, analytics, or logging. Not called on backend errors or in dry-run.
+	OnLimitExceeded func(ctx context.Context, key string, result *Result)
 }
 
 // Option is a functional option for configuring a Limiter.
@@ -149,6 +153,13 @@ func WithDryRun(dryRun bool) Option {
 // would have been denied. If nil, log.Printf with [DRYRUN] prefix is used.
 func WithDryRunLogFunc(fn func(key string, result *Result)) Option {
 	return func(o *Options) { o.DryRunLogFunc = fn }
+}
+
+// WithOnLimitExceeded sets a callback invoked when a request is denied due to
+// rate limit. Use for alerting, analytics, or logging. Not called on backend
+// errors or when DryRun is true.
+func WithOnLimitExceeded(fn func(ctx context.Context, key string, result *Result)) Option {
+	return func(o *Options) { o.OnLimitExceeded = fn }
 }
 
 func defaultOptions() *Options {
@@ -249,8 +260,36 @@ func (d *dryRunLimiter) Reset(ctx context.Context, key string) error {
 	return d.inner.Reset(ctx, key)
 }
 
-// wrapDryRun returns a limiter that applies dry-run behavior when opts.DryRun is true.
-func wrapDryRun(inner Limiter, opts *Options) Limiter {
+// onLimitExceededLimiter invokes OnLimitExceeded when the inner limiter denies.
+type onLimitExceededLimiter struct {
+	inner Limiter
+	opts  *Options
+}
+
+func (o *onLimitExceededLimiter) Allow(ctx context.Context, key string) (*Result, error) {
+	return o.AllowN(ctx, key, 1)
+}
+
+func (o *onLimitExceededLimiter) AllowN(ctx context.Context, key string, n int) (*Result, error) {
+	result, err := o.inner.AllowN(ctx, key, n)
+	if err != nil {
+		return nil, err
+	}
+	if !result.Allowed && o.opts.OnLimitExceeded != nil {
+		o.opts.OnLimitExceeded(ctx, key, result)
+	}
+	return result, nil
+}
+
+func (o *onLimitExceededLimiter) Reset(ctx context.Context, key string) error {
+	return o.inner.Reset(ctx, key)
+}
+
+// wrapOptions applies OnLimitExceeded (when set, and not in DryRun) and DryRun (when set) around the inner limiter.
+func wrapOptions(inner Limiter, opts *Options) Limiter {
+	if opts != nil && opts.OnLimitExceeded != nil && !opts.DryRun {
+		inner = &onLimitExceededLimiter{inner: inner, opts: opts}
+	}
 	if opts != nil && opts.DryRun {
 		return &dryRunLimiter{inner: inner, opts: opts}
 	}

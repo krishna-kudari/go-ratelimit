@@ -21,14 +21,14 @@ func NewTokenBucket(capacity, refillRate int64, opts ...Option) (Limiter, error)
 	o := applyOptions(opts)
 
 	if o.RedisClient != nil {
-		return wrapDryRun(&tokenBucketRedis{
+		return wrapOptions(&tokenBucketRedis{
 			redis:      o.RedisClient,
 			capacity:   capacity,
 			refillRate: refillRate,
 			opts:       o,
 		}, o), nil
 	}
-	return wrapDryRun(&tokenBucketMemory{
+	return wrapOptions(&tokenBucketMemory{
 		states:     make(map[string]*tokenBucketState),
 		capacity:   capacity,
 		refillRate: refillRate,

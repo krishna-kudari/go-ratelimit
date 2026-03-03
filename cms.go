@@ -106,7 +106,7 @@ func NewCMS(limit, windowSeconds int64, epsilon, delta float64, opts ...Option) 
 	width := int(math.Ceil(math.E / epsilon))
 	depth := int(math.Ceil(math.Log(1 / delta)))
 
-	return wrapDryRun(&cmsLimiter{
+	return wrapOptions(&cmsLimiter{
 		current:       newCountMinSketch(width, depth),
 		previous:      newCountMinSketch(width, depth),
 		windowSeconds: windowSeconds,
