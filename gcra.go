@@ -71,7 +71,7 @@ func (g *gcraMemory) AllowN(ctx context.Context, key string, n int) (*Result, er
 		g.states[key] = state
 	}
 
-	now := float64(time.Now().UnixNano()) / 1e9
+	now := float64(g.opts.now().UnixNano()) / 1e9
 	tat := math.Max(state.tat, now)
 	increment := g.emissionInterval * float64(n)
 	newTAT := tat + increment
@@ -145,7 +145,7 @@ func (g *gcraRedis) AllowN(ctx context.Context, key string, n int) (*Result, err
 	fullKey := g.opts.FormatKey(key)
 	burst := g.opts.resolveLimit(key, g.burst)
 	burstAllowance := float64(burst-1) * g.emissionInterval
-	now := float64(time.Now().UnixNano()) / 1e9
+	now := float64(g.opts.now().UnixNano()) / 1e9
 	increment := g.emissionInterval * float64(n)
 
 	result, err := gcraScript.Run(ctx, g.redis, []string{fullKey},

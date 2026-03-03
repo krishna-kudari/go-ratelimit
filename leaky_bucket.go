@@ -78,7 +78,7 @@ type leakyBucketMemory struct {
 func (l *leakyBucketMemory) getState(key string) *leakyBucketState {
 	state, ok := l.states[key]
 	if !ok {
-		now := time.Now()
+		now := l.opts.now()
 		state = &leakyBucketState{lastLeak: now, nextFree: now}
 		l.states[key] = state
 	}
@@ -104,7 +104,7 @@ func (l *leakyBucketMemory) AllowN(ctx context.Context, key string, n int) (*Res
 func (l *leakyBucketMemory) allowPolicing(key string, n int, cap float64) (*Result, error) {
 	state := l.getState(key)
 	limit := int64(cap)
-	now := time.Now()
+	now := l.opts.now()
 
 	elapsed := now.Sub(state.lastLeak).Seconds()
 	leaked := elapsed * l.leakRate
@@ -134,7 +134,7 @@ func (l *leakyBucketMemory) allowPolicing(key string, n int, cap float64) (*Resu
 func (l *leakyBucketMemory) allowShaping(key string, n int, cap float64) (*Result, error) {
 	state := l.getState(key)
 	limit := int64(cap)
-	now := time.Now()
+	now := l.opts.now()
 
 	if state.nextFree.Before(now) {
 		state.nextFree = now
@@ -273,7 +273,7 @@ func (l *leakyBucketRedis) Allow(ctx context.Context, key string) (*Result, erro
 func (l *leakyBucketRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
 	fullKey := l.opts.FormatKey(key)
 	cap := l.opts.resolveLimit(key, l.capacity)
-	now := float64(time.Now().UnixNano()) / 1e9
+	now := float64(l.opts.now().UnixNano()) / 1e9
 
 	script := luaPolicing
 	if l.mode == Shaping {

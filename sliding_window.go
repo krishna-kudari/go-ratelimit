@@ -68,7 +68,7 @@ func (s *slidingWindowMemory) AllowN(ctx context.Context, key string, n int) (*R
 		s.states[key] = state
 	}
 
-	now := time.Now()
+	now := s.opts.now()
 	windowDuration := time.Duration(s.windowSeconds) * time.Second
 
 	// Evict expired timestamps
@@ -132,7 +132,7 @@ func (s *slidingWindowRedis) Allow(ctx context.Context, key string) (*Result, er
 func (s *slidingWindowRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
 	fullKey := s.opts.FormatKey(key)
 	maxReq := s.opts.resolveLimit(key, s.maxRequests)
-	now := time.Now().UnixMilli()
+	now := s.opts.now().UnixMilli()
 	windowStart := now - s.windowSeconds*1000
 
 	// Remove expired entries

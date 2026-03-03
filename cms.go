@@ -108,7 +108,7 @@ func NewCMS(limit, windowSeconds int64, epsilon, delta float64, opts ...Option) 
 		current:       newCountMinSketch(width, depth),
 		previous:      newCountMinSketch(width, depth),
 		windowSeconds: windowSeconds,
-		windowStart:   time.Now(),
+		windowStart:   o.now(),
 		limit:         limit,
 		width:         width,
 		depth:         depth,
@@ -134,7 +134,7 @@ func (r *cmsLimiter) AllowN(ctx context.Context, key string, n int) (*Result, er
 	defer r.mu.Unlock()
 
 	limit := r.opts.resolveLimit(key, r.limit)
-	now := time.Now()
+	now := r.opts.now()
 	windowDuration := time.Duration(r.windowSeconds) * time.Second
 
 	// Rotate sketches when the current window expires.

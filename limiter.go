@@ -63,6 +63,10 @@ type Options struct {
 	// Returns the effective limit (maxRequests / capacity / burst) for the key.
 	// Returning <= 0 falls back to the construction-time default.
 	LimitFunc func(key string) int64
+
+	// Clock provides the current time. If nil, time.Now is used.
+	// Inject a FakeClock in tests to advance time without time.Sleep.
+	Clock Clock
 }
 
 // Option is a functional option for configuring a Limiter.
@@ -111,6 +115,12 @@ func WithLimitFunc(fn func(key string) int64) Option {
 	return func(o *Options) { o.LimitFunc = fn }
 }
 
+// WithClock sets the clock used for time. In tests, pass a FakeClock and call
+// Advance to simulate elapsed time without time.Sleep.
+func WithClock(clock Clock) Option {
+	return func(o *Options) { o.Clock = clock }
+}
+
 func defaultOptions() *Options {
 	return &Options{
 		KeyPrefix: "ratelimit",
@@ -124,6 +134,14 @@ func applyOptions(opts []Option) *Options {
 		opt(o)
 	}
 	return o
+}
+
+// now returns the current time from the option's clock, or time.Now if no clock is set.
+func (o *Options) now() time.Time {
+	if o != nil && o.Clock != nil {
+		return o.Clock.Now()
+	}
+	return time.Now()
 }
 
 // resolveLimit returns the dynamic limit for key, or defaultLimit when

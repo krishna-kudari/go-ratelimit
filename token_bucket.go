@@ -65,12 +65,12 @@ func (t *tokenBucketMemory) AllowN(ctx context.Context, key string, n int) (*Res
 	if !ok {
 		state = &tokenBucketState{
 			tokens:     float64(cap),
-			lastRefill: time.Now(),
+			lastRefill: t.opts.now(),
 		}
 		t.states[key] = state
 	}
 
-	now := time.Now()
+	now := t.opts.now()
 	elapsed := now.Sub(state.lastRefill).Seconds()
 	state.tokens = math.Min(float64(cap), state.tokens+elapsed*float64(t.refillRate))
 	state.lastRefill = now
@@ -161,7 +161,7 @@ func (t *tokenBucketRedis) Allow(ctx context.Context, key string) (*Result, erro
 func (t *tokenBucketRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
 	fullKey := t.opts.FormatKey(key)
 	cap := t.opts.resolveLimit(key, t.capacity)
-	now := float64(time.Now().UnixNano()) / 1e9
+	now := float64(t.opts.now().UnixNano()) / 1e9
 
 	result, err := tokenBucketScript.Run(ctx, t.redis, []string{fullKey},
 		cap,

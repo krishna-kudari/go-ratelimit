@@ -62,11 +62,11 @@ func (f *fixedWindowMemory) AllowN(ctx context.Context, key string, n int) (*Res
 
 	state, ok := f.states[key]
 	if !ok {
-		state = &fixedWindowState{windowStart: time.Now()}
+		state = &fixedWindowState{windowStart: f.opts.now()}
 		f.states[key] = state
 	}
 
-	now := time.Now()
+	now := f.opts.now()
 	windowDuration := time.Duration(f.windowSeconds) * time.Second
 	if now.Sub(state.windowStart) >= windowDuration {
 		state.windowStart = now
@@ -87,7 +87,7 @@ func (f *fixedWindowMemory) AllowN(ctx context.Context, key string, n int) (*Res
 	}
 
 	resetAt := state.windowStart.Add(windowDuration)
-	retryAfter := time.Until(resetAt)
+	retryAfter := resetAt.Sub(now)
 	if retryAfter < 0 {
 		retryAfter = 0
 	}
@@ -170,7 +170,7 @@ func (f *fixedWindowRedis) AllowN(ctx context.Context, key string, n int) (*Resu
 	remaining := result[1]
 	ttlSec := result[2]
 
-	resetAt := time.Now().Add(time.Duration(ttlSec) * time.Second)
+	resetAt := f.opts.now().Add(time.Duration(ttlSec) * time.Second)
 	var retryAfter time.Duration
 	if !allowed {
 		retryAfter = time.Duration(ttlSec) * time.Second

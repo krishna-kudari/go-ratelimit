@@ -147,3 +147,21 @@ func ExampleWithLimitFunc() {
 	// premium: limit=1000
 	// free:    limit=5
 }
+
+func ExampleWithClock() {
+	clock := goratelimit.NewFakeClock()
+	limiter, _ := goratelimit.NewFixedWindow(2, 60, goratelimit.WithClock(clock))
+
+	ctx := context.Background()
+	limiter.Allow(ctx, "k")
+	limiter.Allow(ctx, "k")
+	r, _ := limiter.Allow(ctx, "k")
+	fmt.Printf("before advance: allowed=%v\n", r.Allowed)
+
+	clock.Advance(61 * time.Second)
+	r, _ = limiter.Allow(ctx, "k")
+	fmt.Printf("after advance:  allowed=%v\n", r.Allowed)
+	// Output:
+	// before advance: allowed=false
+	// after advance:  allowed=true
+}

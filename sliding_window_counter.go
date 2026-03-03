@@ -66,11 +66,11 @@ func (s *slidingWindowCounterMemory) AllowN(ctx context.Context, key string, n i
 
 	state, ok := s.states[key]
 	if !ok {
-		state = &slidingWindowCounterState{windowStart: time.Now()}
+		state = &slidingWindowCounterState{windowStart: s.opts.now()}
 		s.states[key] = state
 	}
 
-	now := time.Now()
+	now := s.opts.now()
 	windowDuration := time.Duration(s.windowSeconds) * time.Second
 
 	for now.Sub(state.windowStart) >= windowDuration {
@@ -129,7 +129,7 @@ func (s *slidingWindowCounterRedis) Allow(ctx context.Context, key string) (*Res
 
 func (s *slidingWindowCounterRedis) AllowN(ctx context.Context, key string, n int) (*Result, error) {
 	maxReq := s.opts.resolveLimit(key, s.maxRequests)
-	now := time.Now().Unix()
+	now := s.opts.now().Unix()
 	currentWindow := now / s.windowSeconds
 	previousWindow := currentWindow - 1
 	elapsed := float64(now%s.windowSeconds) / float64(s.windowSeconds)
@@ -188,7 +188,7 @@ func (s *slidingWindowCounterRedis) AllowN(ctx context.Context, key string, n in
 }
 
 func (s *slidingWindowCounterRedis) Reset(ctx context.Context, key string) error {
-	now := time.Now().Unix()
+	now := s.opts.now().Unix()
 	currentWindow := now / s.windowSeconds
 	previousWindow := currentWindow - 1
 	currentKey := s.opts.FormatKeySuffix(key, fmt.Sprintf("%d", currentWindow))
