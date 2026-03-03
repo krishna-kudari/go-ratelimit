@@ -176,6 +176,72 @@ func TestKeyByHeader(t *testing.T) {
 	require.Equal(t, 200, w.Code, "key-B should be allowed")
 }
 
+func TestKeyByAPIKey(t *testing.T) {
+	limiter := must(goratelimit.NewFixedWindow(1, 60))
+	router := newRouter(ginmw.RateLimit(limiter, ginmw.KeyByAPIKey))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/data", nil)
+	req.Header.Set("Authorization", "Bearer tok-1")
+	router.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/data", nil)
+	req.Header.Set("Authorization", "Bearer tok-1")
+	router.ServeHTTP(w, req)
+	require.Equal(t, 429, w.Code)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/data", nil)
+	req.Header.Set("Authorization", "Bearer tok-2")
+	router.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code, "different token should be allowed")
+}
+
+func TestKeyByPath(t *testing.T) {
+	limiter := must(goratelimit.NewFixedWindow(1, 60))
+	router := newRouter(ginmw.RateLimit(limiter, ginmw.KeyByPath))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/data", nil)
+	req.RemoteAddr = "1.1.1.1:1"
+	router.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/data", nil)
+	req.RemoteAddr = "2.2.2.2:2"
+	router.ServeHTTP(w, req)
+	require.Equal(t, 429, w.Code, "same path, different IP still shares limit when keyed by path")
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/health", nil)
+	router.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code, "different path has its own limit")
+}
+
+func TestKeyByUser(t *testing.T) {
+	limiter := must(goratelimit.NewFixedWindow(1, 60))
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("user_id", "u-99")
+		c.Next()
+	})
+	router.Use(ginmw.RateLimit(limiter, ginmw.KeyByUser("user_id")))
+	router.GET("/api/data", func(c *gin.Context) { c.String(200, "ok") })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/data", nil)
+	router.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/data", nil)
+	router.ServeHTTP(w, req)
+	require.Equal(t, 429, w.Code)
+}
+
 func must(l goratelimit.Limiter, err error) goratelimit.Limiter {
 	if err != nil {
 		panic(err)

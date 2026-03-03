@@ -12,6 +12,7 @@
 package fibermw
 
 import (
+	"fmt"
 	"strconv"
 	"time"
 
@@ -112,6 +113,32 @@ func KeyByIP(c *fiber.Ctx) string {
 func KeyByHeader(header string) KeyFunc {
 	return func(c *fiber.Ctx) string {
 		return c.Get(header)
+	}
+}
+
+// KeyByAPIKey extracts the rate limit key from the Authorization header.
+// Use for API key or Bearer token rate limiting.
+func KeyByAPIKey(c *fiber.Ctx) string {
+	return c.Get("Authorization")
+}
+
+// KeyByPath returns the route path as the rate limit key (per-endpoint limiting).
+func KeyByPath(c *fiber.Ctx) string {
+	return c.Path()
+}
+
+// KeyByUser returns a KeyFunc that reads the user from Fiber's Locals.
+// Set the user in a prior middleware (e.g. after JWT); use the same key here.
+func KeyByUser(key string) KeyFunc {
+	return func(c *fiber.Ctx) string {
+		v := c.Locals(key)
+		if v == nil {
+			return ""
+		}
+		if s, ok := v.(string); ok {
+			return s
+		}
+		return fmt.Sprint(v)
 	}
 }
 

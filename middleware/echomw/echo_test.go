@@ -167,6 +167,74 @@ func TestKeyByHeader(t *testing.T) {
 	require.Equal(t, 200, w.Code, "key-B should be allowed")
 }
 
+func TestKeyByAPIKey(t *testing.T) {
+	limiter := must(goratelimit.NewFixedWindow(1, 60))
+	e := newEcho(echomw.RateLimit(limiter, echomw.KeyByAPIKey))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/data", nil)
+	req.Header.Set("Authorization", "Bearer tok-1")
+	e.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/data", nil)
+	req.Header.Set("Authorization", "Bearer tok-1")
+	e.ServeHTTP(w, req)
+	require.Equal(t, 429, w.Code)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/data", nil)
+	req.Header.Set("Authorization", "Bearer tok-2")
+	e.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+}
+
+func TestKeyByPath(t *testing.T) {
+	limiter := must(goratelimit.NewFixedWindow(1, 60))
+	e := newEcho(echomw.RateLimit(limiter, echomw.KeyByPath))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/data", nil)
+	req.RemoteAddr = "1.1.1.1:1"
+	e.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/data", nil)
+	req.RemoteAddr = "2.2.2.2:2"
+	e.ServeHTTP(w, req)
+	require.Equal(t, 429, w.Code)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/health", nil)
+	e.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+}
+
+func TestKeyByUser(t *testing.T) {
+	limiter := must(goratelimit.NewFixedWindow(1, 60))
+	e := echo.New()
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			c.Set("user_id", "u-99")
+			return next(c)
+		}
+	})
+	e.Use(echomw.RateLimit(limiter, echomw.KeyByUser("user_id")))
+	e.GET("/api/data", func(c echo.Context) error { return c.String(200, "ok") })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/data", nil)
+	e.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/data", nil)
+	e.ServeHTTP(w, req)
+	require.Equal(t, 429, w.Code)
+}
+
 func must(l goratelimit.Limiter, err error) goratelimit.Limiter {
 	if err != nil {
 		panic(err)

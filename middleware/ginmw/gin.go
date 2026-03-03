@@ -11,6 +11,7 @@
 package ginmw
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -115,6 +116,32 @@ func KeyByClientIP(c *gin.Context) string {
 func KeyByHeader(header string) KeyFunc {
 	return func(c *gin.Context) string {
 		return c.GetHeader(header)
+	}
+}
+
+// KeyByAPIKey extracts the rate limit key from the Authorization header.
+// Use for API key or Bearer token rate limiting.
+func KeyByAPIKey(c *gin.Context) string {
+	return c.GetHeader("Authorization")
+}
+
+// KeyByPath returns the route path as the rate limit key (per-endpoint limiting).
+func KeyByPath(c *gin.Context) string {
+	return c.FullPath()
+}
+
+// KeyByUser returns a KeyFunc that reads the user from the Gin context.
+// Set the user in context in your auth middleware (e.g. after JWT); use the same key here.
+func KeyByUser(key string) KeyFunc {
+	return func(c *gin.Context) string {
+		v, ok := c.Get(key)
+		if !ok {
+			return ""
+		}
+		if s, ok := v.(string); ok {
+			return s
+		}
+		return fmt.Sprint(v)
 	}
 }
 

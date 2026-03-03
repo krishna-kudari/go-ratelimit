@@ -133,6 +133,51 @@ func TestKeyByHeader(t *testing.T) {
 	require.Equal(t, 200, resp.StatusCode, "key-B should be allowed")
 }
 
+func TestKeyByAPIKey(t *testing.T) {
+	limiter := must(goratelimit.NewFixedWindow(1, 60))
+	app := newApp(fibermw.RateLimit(limiter, fibermw.KeyByAPIKey))
+
+	resp := doReq(app, "GET", "/api/data", map[string]string{"Authorization": "Bearer tok-1"})
+	require.Equal(t, 200, resp.StatusCode)
+
+	resp = doReq(app, "GET", "/api/data", map[string]string{"Authorization": "Bearer tok-1"})
+	require.Equal(t, 429, resp.StatusCode)
+
+	resp = doReq(app, "GET", "/api/data", map[string]string{"Authorization": "Bearer tok-2"})
+	require.Equal(t, 200, resp.StatusCode)
+}
+
+func TestKeyByPath(t *testing.T) {
+	limiter := must(goratelimit.NewFixedWindow(1, 60))
+	app := newApp(fibermw.RateLimit(limiter, fibermw.KeyByPath))
+
+	resp := doReq(app, "GET", "/api/data", nil)
+	require.Equal(t, 200, resp.StatusCode)
+
+	resp = doReq(app, "GET", "/api/data", map[string]string{"X-Forwarded-For": "2.2.2.2"})
+	require.Equal(t, 429, resp.StatusCode)
+
+	resp = doReq(app, "GET", "/health", nil)
+	require.Equal(t, 200, resp.StatusCode)
+}
+
+func TestKeyByUser(t *testing.T) {
+	limiter := must(goratelimit.NewFixedWindow(1, 60))
+	app := fiber.New()
+	app.Use(func(c *fiber.Ctx) error {
+		c.Locals("user_id", "u-99")
+		return c.Next()
+	})
+	app.Use(fibermw.RateLimit(limiter, fibermw.KeyByUser("user_id")))
+	app.Get("/api/data", func(c *fiber.Ctx) error { return c.SendString("ok") })
+
+	resp := doReq(app, "GET", "/api/data", nil)
+	require.Equal(t, 200, resp.StatusCode)
+
+	resp = doReq(app, "GET", "/api/data", nil)
+	require.Equal(t, 429, resp.StatusCode)
+}
+
 func must(l goratelimit.Limiter, err error) goratelimit.Limiter {
 	if err != nil {
 		panic(err)

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -146,6 +147,38 @@ func KeyByIP(r *http.Request) string {
 func KeyByHeader(header string) KeyFunc {
 	return func(r *http.Request) string {
 		return r.Header.Get(header)
+	}
+}
+
+// KeyByAPIKey extracts the rate limit key from the Authorization header.
+// Use for API key or Bearer token rate limiting; each distinct header value is a separate key.
+func KeyByAPIKey(r *http.Request) string {
+	return r.Header.Get("Authorization")
+}
+
+// KeyByPath returns the request path as the rate limit key.
+// Use for per-endpoint (per-route) rate limiting shared across all clients.
+func KeyByPath(r *http.Request) string {
+	return r.URL.Path
+}
+
+// KeyByUser returns a KeyFunc that reads the user identifier from the request context.
+// The key should be the same value used when setting the user in context (e.g. after JWT auth).
+// If the value is not in context, the empty string is returned.
+func KeyByUser(contextKey interface{}) KeyFunc {
+	return func(r *http.Request) string {
+		v := r.Context().Value(contextKey)
+		if v == nil {
+			return ""
+		}
+		switch s := v.(type) {
+		case string:
+			return s
+		case fmt.Stringer:
+			return s.String()
+		default:
+			return fmt.Sprintf("%v", v)
+		}
 	}
 }
 

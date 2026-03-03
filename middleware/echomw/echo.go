@@ -11,6 +11,7 @@
 package echomw
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -115,6 +116,32 @@ func KeyByRealIP(c echo.Context) string {
 func KeyByHeader(header string) KeyFunc {
 	return func(c echo.Context) string {
 		return c.Request().Header.Get(header)
+	}
+}
+
+// KeyByAPIKey extracts the rate limit key from the Authorization header.
+// Use for API key or Bearer token rate limiting.
+func KeyByAPIKey(c echo.Context) string {
+	return c.Request().Header.Get("Authorization")
+}
+
+// KeyByPath returns the route path as the rate limit key (per-endpoint limiting).
+func KeyByPath(c echo.Context) string {
+	return c.Path()
+}
+
+// KeyByUser returns a KeyFunc that reads the user from the Echo context.
+// Set the user in context in your auth middleware (e.g. after JWT); use the same key here.
+func KeyByUser(key string) KeyFunc {
+	return func(c echo.Context) string {
+		v := c.Get(key)
+		if v == nil {
+			return ""
+		}
+		if s, ok := v.(string); ok {
+			return s
+		}
+		return fmt.Sprint(v)
 	}
 }
 

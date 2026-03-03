@@ -1,6 +1,7 @@
 package middleware_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -255,6 +256,32 @@ func TestKeyByPathAndIP(t *testing.T) {
 
 	key := middleware.KeyByPathAndIP(req)
 	assert.Equal(t, "/api/users:10.0.0.5", key, "expected path:ip")
+}
+
+func TestKeyByAPIKey(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+
+	key := middleware.KeyByAPIKey(req)
+	assert.Equal(t, "Bearer sk-abc123", key)
+}
+
+func TestKeyByPath(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/v1/users", nil)
+	key := middleware.KeyByPath(req)
+	assert.Equal(t, "/api/v1/users", key)
+}
+
+func TestKeyByUser(t *testing.T) {
+	type ctxKey struct{}
+	req := httptest.NewRequest("GET", "/", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxKey{}, "user-42"))
+
+	keyFunc := middleware.KeyByUser(ctxKey{})
+	assert.Equal(t, "user-42", keyFunc(req))
+
+	emptyReq := httptest.NewRequest("GET", "/", nil)
+	assert.Empty(t, keyFunc(emptyReq), "missing context value should return empty")
 }
 
 func TestRateLimit_DifferentAlgorithms(t *testing.T) {
