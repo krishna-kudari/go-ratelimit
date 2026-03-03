@@ -19,6 +19,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	goratelimit "github.com/krishna-kudari/ratelimit"
+	"github.com/krishna-kudari/ratelimit/middleware"
 )
 
 // KeyFunc extracts the rate limiting key from an Echo context.
@@ -46,6 +47,12 @@ type Config struct {
 
 	// ExcludePaths are request paths that bypass rate limiting.
 	ExcludePaths map[string]bool
+
+	// BypassFunc, when non-nil, is called per request. If it returns true, the request skips rate limiting.
+	BypassFunc func(c echo.Context) bool
+
+	// Allowlist is a list of CIDR blocks. Requests whose client IP is in any block skip rate limiting.
+	Allowlist []string
 
 	// Headers controls whether X-RateLimit-* headers are set.
 	// Default: true.
@@ -75,10 +82,17 @@ func RateLimitWithConfig(cfg Config) echo.MiddlewareFunc {
 		cfg.ErrorHandler = defaultErrorHandler
 	}
 	sendHeaders := cfg.Headers == nil || *cfg.Headers
+	allowlistNets := middleware.ParseAllowlistCIDRs(cfg.Allowlist)
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if cfg.ExcludePaths != nil && cfg.ExcludePaths[c.Request().URL.Path] {
+				return next(c)
+			}
+			if cfg.BypassFunc != nil && cfg.BypassFunc(c) {
+				return next(c)
+			}
+			if len(allowlistNets) > 0 && middleware.IPInAllowlist(c.RealIP(), allowlistNets) {
 				return next(c)
 			}
 

@@ -162,6 +162,81 @@ func TestRateLimit_ExcludePaths(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code, "/ready should bypass rate limiting")
 }
 
+func TestRateLimit_BypassFunc(t *testing.T) {
+	limiter, err := goratelimit.NewFixedWindow(1, 60)
+	require.NoError(t, err)
+
+	handler := middleware.RateLimitWithConfig(middleware.Config{
+		Limiter:    limiter,
+		KeyFunc:    middleware.KeyByIP,
+		BypassFunc: func(r *http.Request) bool { return r.Header.Get("X-Skip-Limit") == "1" },
+	})(okHandler())
+
+	// Exhaust limit
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api", nil)
+	req.RemoteAddr = "5.5.5.5:1"
+	handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// Without bypass header: denied
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api", nil)
+	req.RemoteAddr = "5.5.5.5:1"
+	handler.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusTooManyRequests, rr.Code)
+
+	// With bypass header: allowed
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api", nil)
+	req.RemoteAddr = "5.5.5.5:1"
+	req.Header.Set("X-Skip-Limit", "1")
+	handler.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code)
+}
+
+func TestRateLimit_Allowlist(t *testing.T) {
+	limiter, err := goratelimit.NewFixedWindow(1, 60)
+	require.NoError(t, err)
+
+	handler := middleware.RateLimitWithConfig(middleware.Config{
+		Limiter:   limiter,
+		KeyFunc:   middleware.KeyByIP,
+		Allowlist: []string{"10.0.0.0/8", "127.0.0.0/8"},
+	})(okHandler())
+
+	// Exhaust limit from non-allowlisted IP
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api", nil)
+	req.RemoteAddr = "192.168.1.1:1"
+	handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api", nil)
+	req.RemoteAddr = "192.168.1.1:1"
+	handler.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusTooManyRequests, rr.Code)
+
+	// Allowlisted IP (10.x) bypasses
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api", nil)
+	req.RemoteAddr = "10.0.0.5:1"
+	handler.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code)
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api", nil)
+	req.RemoteAddr = "10.0.0.5:1"
+	handler.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code, "allowlisted IP should bypass")
+
+	// Allowlisted IP (127.x) bypasses
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	handler.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code)
+}
+
 func TestRateLimit_CustomDeniedHandler(t *testing.T) {
 	limiter, err := goratelimit.NewFixedWindow(1, 60)
 	require.NoError(t, err)

@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	goratelimit "github.com/krishna-kudari/ratelimit"
+	"github.com/krishna-kudari/ratelimit/middleware"
 )
 
 // KeyFunc extracts the rate limiting key from a Gin context.
@@ -46,6 +47,12 @@ type Config struct {
 
 	// ExcludePaths are request paths that bypass rate limiting.
 	ExcludePaths map[string]bool
+
+	// BypassFunc, when non-nil, is called per request. If it returns true, the request skips rate limiting.
+	BypassFunc func(c *gin.Context) bool
+
+	// Allowlist is a list of CIDR blocks. Requests whose client IP is in any block skip rate limiting.
+	Allowlist []string
 
 	// Headers controls whether X-RateLimit-* headers are set.
 	// Default: true.
@@ -75,9 +82,18 @@ func RateLimitWithConfig(cfg Config) gin.HandlerFunc {
 		cfg.ErrorHandler = defaultErrorHandler
 	}
 	sendHeaders := cfg.Headers == nil || *cfg.Headers
+	allowlistNets := middleware.ParseAllowlistCIDRs(cfg.Allowlist)
 
 	return func(c *gin.Context) {
 		if cfg.ExcludePaths != nil && cfg.ExcludePaths[c.Request.URL.Path] {
+			c.Next()
+			return
+		}
+		if cfg.BypassFunc != nil && cfg.BypassFunc(c) {
+			c.Next()
+			return
+		}
+		if len(allowlistNets) > 0 && middleware.IPInAllowlist(c.ClientIP(), allowlistNets) {
 			c.Next()
 			return
 		}

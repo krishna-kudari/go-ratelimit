@@ -43,6 +43,12 @@ type Config struct {
 	// ExcludePaths are request paths that bypass rate limiting.
 	ExcludePaths map[string]bool
 
+	// BypassFunc, when non-nil, is called per request. If it returns true, the request skips rate limiting.
+	BypassFunc BypassFunc
+
+	// Allowlist is a list of CIDR blocks (e.g. "10.0.0.0/8"). Requests whose client IP is in any block skip rate limiting.
+	Allowlist []string
+
 	// Headers controls whether X-RateLimit-* headers are set on responses.
 	// Default: true.
 	Headers *bool
@@ -91,9 +97,18 @@ func RateLimitWithConfig(cfg Config) func(http.Handler) http.Handler {
 	}
 	sendHeaders := cfg.Headers == nil || *cfg.Headers
 
+	allowlistNets := ParseAllowlistCIDRs(cfg.Allowlist)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if cfg.ExcludePaths != nil && cfg.ExcludePaths[r.URL.Path] {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if cfg.BypassFunc != nil && cfg.BypassFunc(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if len(allowlistNets) > 0 && IPInAllowlist(KeyByIP(r), allowlistNets) {
 				next.ServeHTTP(w, r)
 				return
 			}
